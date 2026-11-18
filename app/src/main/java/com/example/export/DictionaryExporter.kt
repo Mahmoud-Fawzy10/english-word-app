@@ -40,13 +40,13 @@ enum class ExportFormat(
     ),
     EXCEL(
         titleAr = "ملف Excel (.xlsx)",
-        subtitleAr = "جدول إكسل حقيقي بأعمدة منسقة جاهز للفتح",
+        subtitleAr = "جدول إكسل حقيقي بأعمدة منسقة جاهز للفتح والاستيراد",
         extension = "xlsx",
         mimeType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     ),
     GOOGLE_SHEETS(
         titleAr = "جدول Google Sheets (.csv)",
-        subtitleAr = "متوافق تماماً مع Google Sheets باللغة العربية أوفلاين",
+        subtitleAr = "متوافق تماماً مع Google Sheets والاستيراد باللغة العربية أوفلاين",
         extension = "csv",
         mimeType = "text/csv"
     )
@@ -56,6 +56,7 @@ object DictionaryExporter {
 
     private val HEADERS = listOf(
         "الكلمة",
+        "النطق الصوتي (IPA)",
         "المعنى بالعربي",
         "الكتاب",
         "المواقع (وحدة / درس / صفحة)",
@@ -93,7 +94,6 @@ object DictionaryExporter {
         format: ExportFormat
     ): Uri {
         val exportDir = File(context.cacheDir, "exports").apply { mkdirs() }
-        // Clean previous cached files to keep storage tidy
         exportDir.listFiles()?.forEach { old ->
             if (System.currentTimeMillis() - old.lastModified() > 60 * 60 * 1000L) {
                 old.delete()
@@ -127,6 +127,7 @@ object DictionaryExporter {
 
         return listOf(
             entry.word,
+            entry.ipa,
             entry.arabicMeaning,
             entry.books.joinToString("، "),
             locationsStr,
@@ -206,7 +207,6 @@ object DictionaryExporter {
             c.restore()
         }
 
-        // Draw top banner on first page
         val headerRect = RectF(margin, margin, pageWidth - margin, margin + 72f)
         canvas.drawRoundRect(headerRect, 18f, 18f, bgHeaderPaint)
 
@@ -230,6 +230,9 @@ object DictionaryExporter {
             val titleLine = buildString {
                 append("${index + 1}. ")
                 append(entry.displayTitle())
+                if (entry.ipa.isNotBlank()) {
+                    append("  ${entry.ipa}")
+                }
                 if (entry.partsOfSpeech.isNotEmpty()) {
                     append("  [${entry.partsOfSpeech.joinToString("، ")}]")
                 }
@@ -305,7 +308,6 @@ object DictionaryExporter {
     // 2. Offline Google Sheets / CSV Generator (UTF-8 with BOM)
     // -------------------------------------------------------------------------
     private fun exportToCsv(words: List<WordEntry>, outputStream: OutputStream) {
-        // Write UTF-8 BOM so Google Sheets and Excel detect Arabic encoding automatically
         outputStream.write(byteArrayOf(0xEF.toByte(), 0xBB.toByte(), 0xBF.toByte()))
         OutputStreamWriter(outputStream, StandardCharsets.UTF_8).use { writer ->
             writer.appendLine(HEADERS.joinToString(",") { escapeCsv(it) })
@@ -356,18 +358,18 @@ object DictionaryExporter {
   <sheetFormatPr defaultRowHeight="22"/>
   <cols>
     <col min="1" max="1" width="22" customWidth="1"/>
-    <col min="2" max="2" width="24" customWidth="1"/>
-    <col min="3" max="3" width="20" customWidth="1"/>
-    <col min="4" max="4" width="28" customWidth="1"/>
-    <col min="5" max="7" width="20" customWidth="1"/>
-    <col min="8" max="12" width="30" customWidth="1"/>
-    <col min="13" max="13" width="12" customWidth="1"/>
+    <col min="2" max="2" width="18" customWidth="1"/>
+    <col min="3" max="3" width="24" customWidth="1"/>
+    <col min="4" max="4" width="20" customWidth="1"/>
+    <col min="5" max="5" width="28" customWidth="1"/>
+    <col min="6" max="8" width="20" customWidth="1"/>
+    <col min="9" max="13" width="30" customWidth="1"/>
+    <col min="14" max="14" width="12" customWidth="1"/>
   </cols>
   <sheetData>
 """
         )
 
-        // Header row (row 1, style 1 = Cobalt Blue background + white bold text)
         sb.append("    <row r=\"1\" ht=\"28\" customHeight=\"1\">\n")
         HEADERS.forEachIndexed { colIndex, header ->
             val ref = "${colLetter(colIndex)}1"
@@ -375,7 +377,6 @@ object DictionaryExporter {
         }
         sb.append("    </row>\n")
 
-        // Data rows
         words.forEachIndexed { rowIdx, entry ->
             val excelRow = rowIdx + 2
             val styleId = if (rowIdx % 2 == 1) 2 else 0

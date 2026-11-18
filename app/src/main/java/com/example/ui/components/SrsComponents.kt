@@ -47,6 +47,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.example.data.model.WordEntry
 import com.example.domain.SrsScheduler
+import com.example.ui.theme.LocalQamusiColors
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -59,6 +60,7 @@ fun SrsStatusBadge(
     val now = System.currentTimeMillis()
     val isDue = entry.isDueForReview(now)
     val isMastered = entry.srsIntervalDays >= 14 && !isDue
+    val palette = LocalQamusiColors.current
 
     val (bg, fg, label) = when {
         entry.isNewForSrs() -> Triple(
@@ -67,13 +69,13 @@ fun SrsStatusBadge(
             "جديدة"
         )
         isDue -> Triple(
-            Color(0xFFDBEAFE),
-            Color(0xFF1D4ED8),
+            palette.srsGoodBg,
+            palette.srsGoodText,
             "مستحقة الآن"
         )
         isMastered -> Triple(
-            Color(0xFFDCFCE7),
-            Color(0xFF166534),
+            palette.successBg,
+            palette.successText,
             "متقنة"
         )
         else -> Triple(

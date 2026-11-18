@@ -55,25 +55,19 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import com.example.data.model.WordLocation
-import com.example.ui.theme.BookA1Bg
-import com.example.ui.theme.BookA1Text
-import com.example.ui.theme.BookCustomBg
-import com.example.ui.theme.BookCustomText
-import com.example.ui.theme.BookMinistryBg
-import com.example.ui.theme.BookMinistryText
-import com.example.ui.theme.BookMoasserBg
-import com.example.ui.theme.BookMoasserText
+import com.example.ui.theme.LocalQamusiColors
 
 @Composable
 fun BookPillBadge(
     bookName: String,
     modifier: Modifier = Modifier
 ) {
+    val palette = LocalQamusiColors.current
     val (bg, fg) = when (bookName.trim()) {
-        "المعاصر" -> BookMoasserBg to BookMoasserText
-        "A1", "a1" -> BookA1Bg to BookA1Text
-        "كتاب الوزارة" -> BookMinistryBg to BookMinistryText
-        else -> BookCustomBg to BookCustomText
+        "المعاصر" -> palette.bookMoasserBg to palette.bookMoasserText
+        "A1", "a1" -> palette.bookA1Bg to palette.bookA1Text
+        "كتاب الوزارة" -> palette.bookMinistryBg to palette.bookMinistryText
+        else -> palette.bookCustomBg to palette.bookCustomText
     }
     Surface(
         modifier = modifier,

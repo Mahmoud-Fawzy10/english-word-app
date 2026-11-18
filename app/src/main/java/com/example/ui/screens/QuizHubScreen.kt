@@ -1,5 +1,6 @@
 package com.example.ui.screens
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -29,6 +30,7 @@ import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Psychology
 import androidx.compose.material.icons.rounded.Quiz
+import androidx.compose.material.icons.rounded.Repeat
 import androidx.compose.material.icons.rounded.Shuffle
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.Button
@@ -124,7 +126,7 @@ fun QuizHubScreen(
                                     color = Color.White
                                 )
                                 Text(
-                                    text = "اختبر نفسك حسب الوحدة أو الدرس أو الصفحة أو عشوائياً، مع نظام التكرار المتباعد لتثبيت الحفظ.",
+                                    text = "اختبر نفسك في المعاني أو الكتابة أو المرادفات والمضادات حسب الوحدة أو الدرس أو الصفحة أو عشوائياً.",
                                     style = MaterialTheme.typography.bodyMedium,
                                     color = Color.White.copy(alpha = 0.9f)
                                 )
@@ -165,7 +167,7 @@ fun QuizHubScreen(
                                         Icon(
                                             imageVector = Icons.Rounded.Psychology,
                                             contentDescription = null,
-                                            tint = Color.White
+                                            tint = MaterialTheme.colorScheme.onPrimary
                                         )
                                     }
                                 }
@@ -225,7 +227,8 @@ fun QuizHubScreen(
                                         selectedContainerColor = MaterialTheme.colorScheme.primary,
                                         selectedLabelColor = MaterialTheme.colorScheme.onPrimary,
                                         selectedLeadingIconColor = MaterialTheme.colorScheme.onPrimary
-                                    )
+                                    ),
+                                    modifier = Modifier.testTag("quiz_scope_${mode.name.lowercase()}")
                                 )
                             }
                         }
@@ -247,7 +250,7 @@ fun QuizHubScreen(
                                 shape = RoundedCornerShape(50),
                                 colors = FilterChipDefaults.filterChipColors(
                                     selectedContainerColor = MaterialTheme.colorScheme.secondary,
-                                    selectedLabelColor = Color.White
+                                    selectedLabelColor = MaterialTheme.colorScheme.onSecondary
                                 )
                             )
                             uiState.availableBooks.forEach { book ->
@@ -263,7 +266,7 @@ fun QuizHubScreen(
                                     shape = RoundedCornerShape(50),
                                     colors = FilterChipDefaults.filterChipColors(
                                         selectedContainerColor = MaterialTheme.colorScheme.secondary,
-                                        selectedLabelColor = Color.White
+                                        selectedLabelColor = MaterialTheme.colorScheme.onSecondary
                                     )
                                 )
                             }
@@ -334,7 +337,7 @@ fun QuizHubScreen(
                 // Question Style, Direction & Count Card
                 item {
                     RoundedSectionCard(
-                        title = "إعدادات الأسئلة",
+                        title = "نوع وإعدادات الأسئلة",
                         icon = Icons.Rounded.Quiz,
                         modifier = Modifier.padding(horizontal = 16.dp)
                     ) {
@@ -353,24 +356,61 @@ fun QuizHubScreen(
                                     colors = FilterChipDefaults.filterChipColors(
                                         selectedContainerColor = MaterialTheme.colorScheme.primary,
                                         selectedLabelColor = MaterialTheme.colorScheme.onPrimary
-                                    )
+                                    ),
+                                    modifier = Modifier.testTag("quiz_type_${qType.name.lowercase()}")
                                 )
                             }
                         }
 
-                        Text("اتجاه السؤال:", style = MaterialTheme.typography.labelLarge)
-                        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            QuizDirection.entries.forEach { dir ->
-                                val selected = quizConfig.direction == dir
-                                FilterChip(
-                                    selected = selected,
-                                    onClick = { onUpdateConfig { it.copy(direction = dir) } },
-                                    label = { Text(dir.labelAr) },
-                                    shape = RoundedCornerShape(50),
-                                    colors = FilterChipDefaults.filterChipColors(
-                                        selectedContainerColor = MaterialTheme.colorScheme.primary,
-                                        selectedLabelColor = MaterialTheme.colorScheme.onPrimary
+                        AnimatedVisibility(
+                            visible = quizConfig.questionType != QuizQuestionType.SYNONYMS &&
+                                quizConfig.questionType != QuizQuestionType.ANTONYMS
+                        ) {
+                            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Text("اتجاه السؤال:", style = MaterialTheme.typography.labelLarge)
+                                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    QuizDirection.entries.forEach { dir ->
+                                        val selected = quizConfig.direction == dir
+                                        FilterChip(
+                                            selected = selected,
+                                            onClick = { onUpdateConfig { it.copy(direction = dir) } },
+                                            label = { Text(dir.labelAr) },
+                                            shape = RoundedCornerShape(50),
+                                            colors = FilterChipDefaults.filterChipColors(
+                                                selectedContainerColor = MaterialTheme.colorScheme.primary,
+                                                selectedLabelColor = MaterialTheme.colorScheme.onPrimary
+                                            )
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        AnimatedVisibility(visible = quizConfig.questionType == QuizQuestionType.FLASHCARD_SRS) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.Repeat,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(18.dp)
                                     )
+                                    Text(
+                                        text = "إعادة البطاقات الصعبة في نهاية الجلسة",
+                                        style = MaterialTheme.typography.bodyMedium
+                                    )
+                                }
+                                Switch(
+                                    checked = quizConfig.requeueForgottenCards,
+                                    onCheckedChange = { req -> onUpdateConfig { it.copy(requeueForgottenCards = req) } }
                                 )
                             }
                         }
@@ -389,7 +429,7 @@ fun QuizHubScreen(
                                     shape = RoundedCornerShape(50),
                                     colors = FilterChipDefaults.filterChipColors(
                                         selectedContainerColor = MaterialTheme.colorScheme.secondary,
-                                        selectedLabelColor = Color.White
+                                        selectedLabelColor = MaterialTheme.colorScheme.onSecondary
                                     )
                                 )
                             }

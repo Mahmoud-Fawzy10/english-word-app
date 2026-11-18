@@ -1,7 +1,9 @@
 package com.example.ui.screens
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -17,11 +19,14 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.automirrored.rounded.VolumeUp
 import androidx.compose.material.icons.rounded.AddLocationAlt
 import androidx.compose.material.icons.rounded.AutoStories
 import androidx.compose.material.icons.rounded.Category
@@ -34,9 +39,13 @@ import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.Lightbulb
 import androidx.compose.material.icons.rounded.LocationOn
 import androidx.compose.material.icons.rounded.MenuBook
+import androidx.compose.material.icons.rounded.MergeType
 import androidx.compose.material.icons.rounded.Psychology
+import androidx.compose.material.icons.rounded.RecordVoiceOver
 import androidx.compose.material.icons.rounded.Translate
+import androidx.compose.material.icons.rounded.WarningAmber
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -57,6 +66,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -68,12 +78,8 @@ import com.example.ui.components.MultiSelectPillGroup
 import com.example.ui.components.RoundedBlueTextField
 import com.example.ui.components.RoundedSectionCard
 import com.example.ui.components.TagChipInput
-import com.example.ui.theme.AntonymChipBg
-import com.example.ui.theme.AntonymChipText
-import com.example.ui.theme.ImportantNoteBg
-import com.example.ui.theme.ImportantNoteBorder
-import com.example.ui.theme.SynonymChipBg
-import com.example.ui.theme.SynonymChipText
+import com.example.ui.theme.LocalQamusiColors
+import kotlinx.coroutines.delay
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -82,11 +88,15 @@ fun AddEditWordScreen(
     prefillQuery: String,
     availableBooks: List<String>,
     availablePartsOfSpeech: List<String>,
-    onSave: (WordEntry) -> Unit,
+    onCheckDuplicates: suspend (word: String, arabicMeaning: String, excludeId: Long) -> List<WordEntry>,
+    onSpeakWord: (String) -> Unit,
+    onOpenExistingWord: (Long) -> Unit,
+    onSave: (entry: WordEntry, mergeTarget: WordEntry?) -> Unit,
     onBack: () -> Unit
 ) {
     BackHandler { onBack() }
 
+    val palette = LocalQamusiColors.current
     val isEditing = existingWord != null
     val prefillIsArabic = remember(prefillQuery) {
         prefillQuery.any { it in '\u0600'..'\u06FF' }
@@ -97,6 +107,11 @@ fun AddEditWordScreen(
             existingWord?.word ?: if (!prefillIsArabic) prefillQuery else ""
         )
     }
+    var ipa by remember(existingWord?.id) {
+        mutableStateOf(existingWord?.ipa ?: "")
+    }
+    var showIpaKeyboard by remember { mutableStateOf(false) }
+
     var arabicMeaning by remember(existingWord?.id) {
         mutableStateOf(
             existingWord?.arabicMeaning ?: if (prefillIsArabic) prefillQuery else ""
@@ -141,9 +156,12 @@ fun AddEditWordScreen(
     var importantNotes by remember(existingWord?.id) { mutableStateOf(existingWord?.importantNotes ?: "") }
     var isFavorite by remember(existingWord?.id) { mutableStateOf(existingWord?.isFavorite ?: false) }
 
+    var duplicateMatches by remember { mutableStateOf<List<WordEntry>>(emptyList()) }
+
     LaunchedEffect(existingWord) {
         if (existingWord != null) {
             word = existingWord.word
+            ipa = existingWord.ipa
             arabicMeaning = existingWord.arabicMeaning
             selectedBooks = existingWord.books.toSet()
             locations.clear()
@@ -162,7 +180,16 @@ fun AddEditWordScreen(
         }
     }
 
-    fun commitPendingTagsAndSave() {
+    LaunchedEffect(word, arabicMeaning, existingWord?.id) {
+        if (word.isBlank() && arabicMeaning.isBlank()) {
+            duplicateMatches = emptyList()
+            return@LaunchedEffect
+        }
+        delay(220)
+        duplicateMatches = onCheckDuplicates(word, arabicMeaning, existingWord?.id ?: 0L)
+    }
+
+    fun commitPendingTagsAndSave(mergeTarget: WordEntry? = null) {
         if (pendingSynonym.isNotBlank()) {
             pendingSynonym.split(',', '،', '\n').map { it.trim() }.filter { it.isNotBlank() }
                 .forEach { if (!synonyms.contains(it)) synonyms.add(it) }
@@ -177,6 +204,7 @@ fun AddEditWordScreen(
         val entry = WordEntry(
             id = existingWord?.id ?: 0L,
             word = word,
+            ipa = ipa,
             arabicMeaning = arabicMeaning,
             books = selectedBooks.toList(),
             locations = locations.toList(),
@@ -190,9 +218,16 @@ fun AddEditWordScreen(
             importantNotes = importantNotes,
             isFavorite = isFavorite,
             createdAt = existingWord?.createdAt ?: System.currentTimeMillis(),
-            updatedAt = System.currentTimeMillis()
+            updatedAt = System.currentTimeMillis(),
+            srsRepetitions = existingWord?.srsRepetitions ?: 0,
+            srsIntervalDays = existingWord?.srsIntervalDays ?: 0,
+            srsEaseFactor = existingWord?.srsEaseFactor ?: 2.5f,
+            srsNextReviewAt = existingWord?.srsNextReviewAt ?: 0L,
+            srsLastReviewedAt = existingWord?.srsLastReviewedAt ?: 0L,
+            srsTotalReviews = existingWord?.srsTotalReviews ?: 0,
+            srsCorrectCount = existingWord?.srsCorrectCount ?: 0
         )
-        onSave(entry)
+        onSave(entry, mergeTarget)
     }
 
     Scaffold(
@@ -218,6 +253,20 @@ fun AddEditWordScreen(
                     }
                 },
                 actions = {
+                    if (word.isNotBlank()) {
+                        IconButton(
+                            onClick = { onSpeakWord(word) },
+                            modifier = Modifier
+                                .minimumInteractiveComponentSize()
+                                .testTag("speak_word_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Rounded.VolumeUp,
+                                contentDescription = "نطق الكلمة محلياً",
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
                     IconButton(
                         onClick = { isFavorite = !isFavorite },
                         modifier = Modifier.minimumInteractiveComponentSize()
@@ -250,7 +299,7 @@ fun AddEditWordScreen(
                     contentAlignment = Alignment.Center
                 ) {
                     Button(
-                        onClick = { commitPendingTagsAndSave() },
+                        onClick = { commitPendingTagsAndSave(null) },
                         modifier = Modifier
                             .widthIn(max = 600.dp)
                             .fillMaxWidth()
@@ -261,7 +310,11 @@ fun AddEditWordScreen(
                         Icon(imageVector = Icons.Rounded.Check, contentDescription = null)
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = if (isEditing) "حفظ التعديلات" else "حفظ الكلمة في قاموسي",
+                            text = when {
+                                isEditing -> "حفظ التعديلات"
+                                duplicateMatches.isNotEmpty() -> "حفظ ككلمة مستقلة"
+                                else -> "حفظ الكلمة في قاموسي"
+                            },
                             style = MaterialTheme.typography.titleMedium
                         )
                     }
@@ -310,19 +363,200 @@ fun AddEditWordScreen(
                     }
                 }
 
-                // 1. Word & Arabic Meaning
+                // Live Duplicate Warning Banner
+                AnimatedVisibility(visible = duplicateMatches.isNotEmpty()) {
+                    val firstMatch = duplicateMatches.firstOrNull()
+                    if (firstMatch != null) {
+                        Surface(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("duplicate_warning_banner"),
+                            shape = RoundedCornerShape(24.dp),
+                            color = palette.warningBg,
+                            border = BorderStroke(1.5.dp, palette.warningBorder)
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(14.dp),
+                                verticalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.WarningAmber,
+                                        contentDescription = null,
+                                        tint = palette.warningText
+                                    )
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = "هذه الكلمة موجودة بالفعل في قاموسك!",
+                                            style = MaterialTheme.typography.titleSmall,
+                                            color = palette.warningText,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                        Text(
+                                            text = buildString {
+                                                append(firstMatch.displayTitle())
+                                                if (firstMatch.arabicMeaning.isNotBlank() && firstMatch.word.isNotBlank()) {
+                                                    append(" • ")
+                                                    append(firstMatch.arabicMeaning)
+                                                }
+                                            },
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = palette.warningText
+                                        )
+                                    }
+                                }
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    OutlinedButton(
+                                        onClick = { onOpenExistingWord(firstMatch.id) },
+                                        shape = RoundedCornerShape(50),
+                                        border = BorderStroke(1.dp, palette.warningBorder),
+                                        colors = ButtonDefaults.outlinedButtonColors(contentColor = palette.warningText),
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Text("عرض الموجودة")
+                                    }
+                                    if (!isEditing) {
+                                        Button(
+                                            onClick = { commitPendingTagsAndSave(firstMatch) },
+                                            shape = RoundedCornerShape(50),
+                                            colors = ButtonDefaults.buttonColors(
+                                                containerColor = palette.warningBorder,
+                                                contentColor = MaterialTheme.colorScheme.onPrimary
+                                            ),
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .testTag("merge_duplicate_button")
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Rounded.MergeType,
+                                                contentDescription = null,
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Text("دمج معها")
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // 1. Word, IPA & Arabic Meaning
                 RoundedSectionCard(
-                    title = "الكلمة ومعناها",
+                    title = "الكلمة والنطق والمعنى",
                     icon = Icons.Rounded.Translate
                 ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        RoundedBlueTextField(
+                            value = word,
+                            onValueChange = { word = it },
+                            label = "الكلمة (Word / Phrase)",
+                            placeholder = "مثال: sustainable",
+                            singleLine = true,
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("word_input")
+                        )
+                        if (word.isNotBlank()) {
+                            Surface(
+                                modifier = Modifier
+                                    .minimumInteractiveComponentSize()
+                                    .size(50.dp)
+                                    .clip(RoundedCornerShape(18.dp))
+                                    .clickable { onSpeakWord(word) }
+                                    .testTag("speak_field_button"),
+                                shape = RoundedCornerShape(18.dp),
+                                color = MaterialTheme.colorScheme.primaryContainer
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        imageVector = Icons.AutoMirrored.Rounded.VolumeUp,
+                                        contentDescription = "استماع للنطق",
+                                        tint = MaterialTheme.colorScheme.primary
+                                    )
+                                }
+                            }
+                        }
+                    }
+
                     RoundedBlueTextField(
-                        value = word,
-                        onValueChange = { word = it },
-                        label = "الكلمة (Word / Phrase)",
-                        placeholder = "مثال: sustainable",
+                        value = ipa,
+                        onValueChange = { ipa = it },
+                        label = "الرمز الصوتي للنطق (IPA)",
+                        placeholder = "مثال: /səˈsteɪnəbl/",
                         singleLine = true,
-                        modifier = Modifier.testTag("word_input")
+                        leadingIcon = Icons.Rounded.RecordVoiceOver,
+                        modifier = Modifier.testTag("ipa_input")
                     )
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = if (showIpaKeyboard) "إخفاء رموز IPA السريعة" else "إظهار رموز IPA السريعة",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(50))
+                                .clickable { showIpaKeyboard = !showIpaKeyboard }
+                                .padding(horizontal = 8.dp, vertical = 4.dp)
+                                .testTag("toggle_ipa_symbols_button")
+                        )
+                        if (ipa.isNotBlank()) {
+                            Text(
+                                text = "مسح IPA",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(50))
+                                    .clickable { ipa = "" }
+                                    .padding(horizontal = 8.dp, vertical = 4.dp)
+                            )
+                        }
+                    }
+
+                    AnimatedVisibility(visible = showIpaKeyboard) {
+                        LazyRow(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            items(CurriculumDefaults.IPA_QUICK_SYMBOLS) { sym ->
+                                Surface(
+                                    modifier = Modifier
+                                        .minimumInteractiveComponentSize()
+                                        .clip(RoundedCornerShape(14.dp))
+                                        .clickable { ipa += sym },
+                                    shape = RoundedCornerShape(14.dp),
+                                    color = MaterialTheme.colorScheme.primaryContainer,
+                                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
+                                ) {
+                                    Box(
+                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(
+                                            text = sym,
+                                            style = MaterialTheme.typography.titleMedium,
+                                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     RoundedBlueTextField(
                         value = arabicMeaning,
                         onValueChange = { arabicMeaning = it },
@@ -428,8 +662,8 @@ fun AddEditWordScreen(
                         onPendingInputChange = { pendingSynonym = it },
                         onAddTag = { tag -> if (!synonyms.contains(tag)) synonyms.add(tag) },
                         onRemoveTag = { tag -> synonyms.remove(tag) },
-                        chipColor = SynonymChipBg,
-                        chipTextColor = SynonymChipText,
+                        chipColor = palette.synonymBg,
+                        chipTextColor = palette.synonymText,
                         testTagPrefix = "synonyms"
                     )
 
@@ -441,8 +675,8 @@ fun AddEditWordScreen(
                         onPendingInputChange = { pendingAntonym = it },
                         onAddTag = { tag -> if (!antonyms.contains(tag)) antonyms.add(tag) },
                         onRemoveTag = { tag -> antonyms.remove(tag) },
-                        chipColor = AntonymChipBg,
-                        chipTextColor = AntonymChipText,
+                        chipColor = palette.antonymBg,
+                        chipTextColor = palette.antonymText,
                         testTagPrefix = "antonyms"
                     )
                 }
@@ -499,8 +733,8 @@ fun AddEditWordScreen(
 
                     Surface(
                         shape = RoundedCornerShape(22.dp),
-                        color = ImportantNoteBg,
-                        border = BorderStroke(1.dp, ImportantNoteBorder)
+                        color = palette.importantNoteBg,
+                        border = BorderStroke(1.dp, palette.importantNoteBorder)
                     ) {
                         Column(modifier = Modifier.padding(10.dp)) {
                             RoundedBlueTextField(

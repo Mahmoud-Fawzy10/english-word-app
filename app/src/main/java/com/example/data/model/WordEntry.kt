@@ -8,6 +8,7 @@ data class WordEntry(
     @PrimaryKey(autoGenerate = true)
     val id: Long = 0L,
     val word: String = "",
+    val ipa: String = "",
     val arabicMeaning: String = "",
     val books: List<String> = emptyList(),
     val locations: List<WordLocation> = emptyList(),
@@ -40,6 +41,7 @@ data class WordEntry(
 
     fun hasAnyContent(): Boolean =
         word.isNotBlank() ||
+            ipa.isNotBlank() ||
             arabicMeaning.isNotBlank() ||
             books.isNotEmpty() ||
             locations.any { it.isNotBlank() } ||

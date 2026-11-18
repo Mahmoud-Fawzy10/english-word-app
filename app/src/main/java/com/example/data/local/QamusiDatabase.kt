@@ -11,7 +11,7 @@ import com.example.data.model.WordEntry
 
 @Database(
     entities = [WordEntry::class],
-    version = 2,
+    version = 3,
     exportSchema = false
 )
 @TypeConverters(WordTypeConverters::class)
@@ -34,6 +34,12 @@ abstract class QamusiDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE word_entries ADD COLUMN ipa TEXT NOT NULL DEFAULT ''")
+            }
+        }
+
         fun getInstance(context: Context): QamusiDatabase {
             return INSTANCE ?: synchronized(this) {
                 INSTANCE ?: Room.databaseBuilder(
@@ -41,7 +47,7 @@ abstract class QamusiDatabase : RoomDatabase() {
                     QamusiDatabase::class.java,
                     "qamusi_dictionary.db"
                 )
-                    .addMigrations(MIGRATION_1_2)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
                     .build()
                     .also { INSTANCE = it }
             }

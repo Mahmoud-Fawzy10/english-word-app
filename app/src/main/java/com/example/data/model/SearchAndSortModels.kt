@@ -17,11 +17,17 @@ object CurriculumDefaults {
         "أداة ربط (Conj)",
         "تعبير / مصطلح (Idiom)"
     )
+
+    val IPA_QUICK_SYMBOLS = listOf(
+        "/", "ˈ", "ˌ", "ː", "ə", "ɜː", "ɪ", "iː", "ʊ", "uː",
+        "æ", "ɑː", "ɒ", "ɔː", "ʌ", "e", "ʃ", "ʒ", "tʃ", "dʒ", "θ", "ð", "ŋ"
+    )
 }
 
 enum class SearchField(val labelAr: String) {
     ALL("الكل"),
     WORD("الكلمة"),
+    IPA("النطق IPA"),
     ARABIC_MEANING("المعنى بالعربي"),
     BOOK("الكتاب"),
     LOCATION("الوحدة / الدرس / الصفحة"),
@@ -32,6 +38,18 @@ enum class SearchField(val labelAr: String) {
     DERIVATIVES("الاشتقاقات"),
     EXPRESSIONS("التعبيرات اللغوية"),
     NOTES("الملاحظات")
+}
+
+enum class BrowseGroupMode(val labelAr: String) {
+    FLAT_LIST("قائمة"),
+    BY_PART_OF_SPEECH("أقسام الكلام"),
+    BY_CURRICULUM("الوحدة والدرس")
+}
+
+enum class DuplicatePolicy(val labelAr: String, val descriptionAr: String) {
+    SKIP("تخطي الكلمات المكررة", "الإبقاء على الكلمات الحالية كما هي"),
+    MERGE("دمج وتحديث المكررة", "دمج المواقع والمرادفات والمعاني الجديدة في الكلمة الموجودة"),
+    KEEP_BOTH("استيراد الكل (حتى المكرر)", "إضافة جميع الكلمات كإدخالات مستقلة")
 }
 
 data class AdvancedSearchFilter(

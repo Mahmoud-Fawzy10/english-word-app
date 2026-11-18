@@ -12,6 +12,13 @@ enum class SrsGrade(val labelAr: String, val subtitleAr: String) {
     EASY("سهلة", "متقنة تماماً")
 }
 
+enum class SrsMaturity(val labelAr: String) {
+    NEW("جديدة"),
+    LEARNING("قيد التعلم"),
+    REVIEWING("قيد التثبيت"),
+    MASTERED("متقنة")
+}
+
 data class SrsScheduleResult(
     val repetitions: Int,
     val intervalDays: Int,
@@ -21,6 +28,13 @@ data class SrsScheduleResult(
 
 object SrsScheduler {
     const val DAY_MILLIS: Long = 24L * 60L * 60L * 1000L
+
+    fun maturityOf(entry: WordEntry): SrsMaturity = when {
+        entry.isNewForSrs() -> SrsMaturity.NEW
+        entry.srsIntervalDays >= 14 && entry.srsRepetitions >= 3 -> SrsMaturity.MASTERED
+        entry.srsIntervalDays >= 3 -> SrsMaturity.REVIEWING
+        else -> SrsMaturity.LEARNING
+    }
 
     fun scheduleNext(
         entry: WordEntry,

@@ -8,8 +8,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -17,7 +15,6 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -26,22 +23,27 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.Sort
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Bookmark
+import androidx.compose.material.icons.rounded.BrightnessAuto
+import androidx.compose.material.icons.rounded.Category
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.CloudOff
+import androidx.compose.material.icons.rounded.DarkMode
 import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.Favorite
-import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.FilterList
-import androidx.compose.material.icons.rounded.LocationOn
+import androidx.compose.material.icons.rounded.LightMode
+import androidx.compose.material.icons.rounded.MenuBook
 import androidx.compose.material.icons.rounded.Psychology
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Tune
+import androidx.compose.material.icons.rounded.WarningAmber
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Button
@@ -81,40 +83,65 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.R
+import com.example.data.local.ThemeMode
 import com.example.data.model.AdvancedSearchFilter
+import com.example.data.model.BrowseGroupMode
 import com.example.data.model.SearchField
 import com.example.data.model.SortOption
 import com.example.data.model.WordEntry
 import com.example.export.ExportFormat
-import com.example.ui.components.BookPillBadge
-import com.example.ui.components.SrsStatusBadge
+import com.example.ui.components.GroupSectionHeader
+import com.example.ui.components.WordSummaryCard
+import com.example.ui.components.buildCurriculumGroups
+import com.example.ui.components.buildPosGroups
 import com.example.ui.theme.CobaltDark
 import com.example.ui.theme.CobaltPrimary
+import com.example.ui.theme.LocalQamusiColors
 import com.example.ui.theme.SkyAccent
-import com.example.ui.theme.SynonymChipBg
-import com.example.ui.theme.SynonymChipText
 import com.example.ui.viewmodel.DictionaryUiState
 
 @Composable
 fun HomeScreen(
     uiState: DictionaryUiState,
+    themeMode: ThemeMode,
     snackbarHostState: SnackbarHostState,
     onSearchQueryChange: (String) -> Unit,
     onSearchFieldChange: (SearchField) -> Unit,
     onToggleBookFilter: (String?) -> Unit,
+    onBrowseGroupModeChange: (BrowseGroupMode) -> Unit,
     onApplyAdvancedFilter: (AdvancedSearchFilter) -> Unit,
     onClearAllFilters: () -> Unit,
     onSortSelect: (SortOption) -> Unit,
     onWordClick: (Long) -> Unit,
     onToggleFavorite: (WordEntry) -> Unit,
+    onSpeakWord: (String) -> Unit,
     onAddWordClick: (prefillQuery: String) -> Unit,
     onStartDueReviewClick: () -> Unit,
+    onCycleThemeMode: () -> Unit,
+    onMergeAllDuplicates: () -> Unit,
+    onOpenStatsAndBackup: () -> Unit,
     onSaveExport: (ExportFormat, Boolean) -> Unit,
     onShareExport: (ExportFormat, Boolean) -> Unit
 ) {
     var showAdvancedSheet by remember { mutableStateOf(false) }
     var showSortSheet by remember { mutableStateOf(false) }
     var showExportSheet by remember { mutableStateOf(false) }
+    val palette = LocalQamusiColors.current
+
+    val posGroups = remember(uiState.filteredWords, uiState.browseGroupMode) {
+        if (uiState.browseGroupMode == BrowseGroupMode.BY_PART_OF_SPEECH) {
+            buildPosGroups(uiState.filteredWords)
+        } else {
+            emptyList()
+        }
+    }
+    val curriculumGroups = remember(uiState.filteredWords, uiState.browseGroupMode) {
+        if (uiState.browseGroupMode == BrowseGroupMode.BY_CURRICULUM) {
+            buildCurriculumGroups(uiState.filteredWords)
+        } else {
+            emptyList()
+        }
+    }
 
     Scaffold(
         modifier = Modifier.fillMaxSize(),
@@ -153,7 +180,7 @@ fun HomeScreen(
                 modifier = Modifier
                     .fillMaxSize()
                     .widthIn(max = 720.dp),
-                contentPadding = PaddingValues(bottom = 92.dp),
+                contentPadding = PaddingValues(bottom = 96.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 // Rounded Blue Hero Header
@@ -161,6 +188,8 @@ fun HomeScreen(
                     BlueDictionaryHeader(
                         totalWords = uiState.allWordsCount,
                         favoriteCount = uiState.favoriteCount,
+                        themeMode = themeMode,
+                        onCycleThemeMode = onCycleThemeMode,
                         onExportClick = { showExportSheet = true }
                     )
                 }
@@ -195,7 +224,7 @@ fun HomeScreen(
                                         Icon(
                                             imageVector = Icons.Rounded.Psychology,
                                             contentDescription = null,
-                                            tint = Color.White,
+                                            tint = MaterialTheme.colorScheme.onPrimary,
                                             modifier = Modifier.size(22.dp)
                                         )
                                     }
@@ -219,8 +248,72 @@ fun HomeScreen(
                                     Text(
                                         text = "راجع",
                                         style = MaterialTheme.typography.labelLarge,
-                                        color = Color.White,
+                                        color = MaterialTheme.colorScheme.onPrimary,
                                         modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Duplicate Alert Banner (when duplicates exist)
+                if (uiState.duplicateGroups.isNotEmpty()) {
+                    item {
+                        Surface(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp)
+                                .testTag("home_duplicates_banner"),
+                            shape = RoundedCornerShape(22.dp),
+                            color = palette.warningBg,
+                            border = BorderStroke(1.dp, palette.warningBorder)
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.WarningAmber,
+                                    contentDescription = null,
+                                    tint = palette.warningText,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                                Text(
+                                    text = "توجد ${uiState.duplicateGroups.size} مجموعات كلمات مكررة",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = palette.warningText,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                Surface(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(50))
+                                        .clickable { onMergeAllDuplicates() },
+                                    shape = RoundedCornerShape(50),
+                                    color = palette.warningBorder
+                                ) {
+                                    Text(
+                                        text = "دمج الكل",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = Color.White,
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                                    )
+                                }
+                                Surface(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(50))
+                                        .clickable { onOpenStatsAndBackup() },
+                                    shape = RoundedCornerShape(50),
+                                    color = MaterialTheme.colorScheme.surface
+                                ) {
+                                    Text(
+                                        text = "عرض",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = palette.warningText,
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
                                     )
                                 }
                             }
@@ -323,35 +416,27 @@ fun HomeScreen(
                         }
 
                         // "Search By" field selector pills
-                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                            Text(
-                                text = "بحث حسب:",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(horizontal = 4.dp)
-                            )
-                            LazyRow(
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                items(SearchField.entries) { field ->
-                                    val selected = uiState.searchField == field
-                                    FilterChip(
+                        LazyRow(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            items(SearchField.entries) { field ->
+                                val selected = uiState.searchField == field
+                                FilterChip(
+                                    selected = selected,
+                                    onClick = { onSearchFieldChange(field) },
+                                    label = { Text(field.labelAr) },
+                                    shape = RoundedCornerShape(50),
+                                    colors = FilterChipDefaults.filterChipColors(
+                                        selectedContainerColor = MaterialTheme.colorScheme.primary,
+                                        selectedLabelColor = MaterialTheme.colorScheme.onPrimary,
+                                        containerColor = MaterialTheme.colorScheme.surface
+                                    ),
+                                    border = FilterChipDefaults.filterChipBorder(
+                                        enabled = true,
                                         selected = selected,
-                                        onClick = { onSearchFieldChange(field) },
-                                        label = { Text(field.labelAr) },
-                                        shape = RoundedCornerShape(50),
-                                        colors = FilterChipDefaults.filterChipColors(
-                                            selectedContainerColor = MaterialTheme.colorScheme.primary,
-                                            selectedLabelColor = MaterialTheme.colorScheme.onPrimary,
-                                            containerColor = MaterialTheme.colorScheme.surface
-                                        ),
-                                        border = FilterChipDefaults.filterChipBorder(
-                                            enabled = true,
-                                            selected = selected,
-                                            borderColor = MaterialTheme.colorScheme.outline
-                                        )
+                                        borderColor = MaterialTheme.colorScheme.outline
                                     )
-                                }
+                                )
                             }
                         }
 
@@ -374,7 +459,7 @@ fun HomeScreen(
                                         shape = RoundedCornerShape(50),
                                         colors = FilterChipDefaults.filterChipColors(
                                             selectedContainerColor = MaterialTheme.colorScheme.secondary,
-                                            selectedLabelColor = Color.White,
+                                            selectedLabelColor = MaterialTheme.colorScheme.onSecondary,
                                             containerColor = MaterialTheme.colorScheme.surface
                                         )
                                     )
@@ -388,7 +473,7 @@ fun HomeScreen(
                                         shape = RoundedCornerShape(50),
                                         colors = FilterChipDefaults.filterChipColors(
                                             selectedContainerColor = MaterialTheme.colorScheme.secondary,
-                                            selectedLabelColor = Color.White,
+                                            selectedLabelColor = MaterialTheme.colorScheme.onSecondary,
                                             containerColor = MaterialTheme.colorScheme.surface
                                         )
                                     )
@@ -425,6 +510,51 @@ fun HomeScreen(
                             }
                         }
 
+                        // 3-Mode Grouping Switcher: قائمة | أقسام الكلام | الوحدة والدرس
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            BrowseGroupMode.entries.forEach { mode ->
+                                val selected = uiState.browseGroupMode == mode
+                                Surface(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .minimumInteractiveComponentSize()
+                                        .clip(RoundedCornerShape(50))
+                                        .clickable { onBrowseGroupModeChange(mode) }
+                                        .testTag("browse_mode_${mode.name.lowercase()}"),
+                                    shape = RoundedCornerShape(50),
+                                    color = if (selected) {
+                                        MaterialTheme.colorScheme.primary
+                                    } else {
+                                        MaterialTheme.colorScheme.surface
+                                    },
+                                    border = BorderStroke(
+                                        1.dp,
+                                        if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline
+                                    )
+                                ) {
+                                    Box(
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 10.dp),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(
+                                            text = mode.labelAr,
+                                            style = MaterialTheme.typography.labelLarge,
+                                            color = if (selected) {
+                                                MaterialTheme.colorScheme.onPrimary
+                                            } else {
+                                                MaterialTheme.colorScheme.onSurface
+                                            },
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
                         AnimatedVisibility(visible = uiState.isSearchOrFilterActive) {
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
@@ -455,7 +585,7 @@ fun HomeScreen(
                     }
                 }
 
-                // Empty State OR Not-Found State with Instant Add Button
+                // Empty State OR Not-Found State OR Grouped/Flat Word Cards
                 if (uiState.allWordsCount == 0) {
                     item {
                         EmptyDictionaryCard(
@@ -471,16 +601,75 @@ fun HomeScreen(
                         )
                     }
                 } else {
-                    items(
-                        items = uiState.filteredWords,
-                        key = { it.id }
-                    ) { wordEntry ->
-                        WordSummaryCard(
-                            entry = wordEntry,
-                            onClick = { onWordClick(wordEntry.id) },
-                            onToggleFavorite = { onToggleFavorite(wordEntry) },
-                            modifier = Modifier.padding(horizontal = 16.dp)
-                        )
+                    when (uiState.browseGroupMode) {
+                        BrowseGroupMode.FLAT_LIST -> {
+                            items(
+                                items = uiState.filteredWords,
+                                key = { it.id }
+                            ) { wordEntry ->
+                                WordSummaryCard(
+                                    entry = wordEntry,
+                                    onClick = { onWordClick(wordEntry.id) },
+                                    onToggleFavorite = { onToggleFavorite(wordEntry) },
+                                    onSpeakWord = onSpeakWord,
+                                    modifier = Modifier.padding(horizontal = 16.dp)
+                                )
+                            }
+                        }
+
+                        BrowseGroupMode.BY_PART_OF_SPEECH -> {
+                            posGroups.forEach { (posName, groupWords) ->
+                                item(key = "pos_header_$posName") {
+                                    GroupSectionHeader(
+                                        title = posName,
+                                        count = groupWords.size,
+                                        icon = Icons.Rounded.Category,
+                                        modifier = Modifier.padding(horizontal = 16.dp)
+                                    )
+                                }
+                                itemsIndexed(
+                                    items = groupWords,
+                                    key = { idx, w -> "pos_${posName}_${w.id}_$idx" }
+                                ) { _, wordEntry ->
+                                    WordSummaryCard(
+                                        entry = wordEntry,
+                                        onClick = { onWordClick(wordEntry.id) },
+                                        onToggleFavorite = { onToggleFavorite(wordEntry) },
+                                        onSpeakWord = onSpeakWord,
+                                        modifier = Modifier.padding(horizontal = 16.dp)
+                                    )
+                                }
+                            }
+                        }
+
+                        BrowseGroupMode.BY_CURRICULUM -> {
+                            curriculumGroups.forEach { unitGroup ->
+                                item(key = "cur_header_${unitGroup.unitTitle}") {
+                                    GroupSectionHeader(
+                                        title = unitGroup.unitTitle,
+                                        count = unitGroup.items.size,
+                                        icon = Icons.Rounded.MenuBook,
+                                        modifier = Modifier.padding(horizontal = 16.dp)
+                                    )
+                                }
+                                itemsIndexed(
+                                    items = unitGroup.items,
+                                    key = { idx, item -> "cur_${unitGroup.unitTitle}_${item.entry.id}_$idx" }
+                                ) { _, item ->
+                                    val subTag = listOf(item.lessonLabel, item.pageLabel)
+                                        .filter { it.isNotBlank() }
+                                        .joinToString(" • ")
+                                    WordSummaryCard(
+                                        entry = item.entry,
+                                        subHeaderTag = subTag.ifBlank { null },
+                                        onClick = { onWordClick(item.entry.id) },
+                                        onToggleFavorite = { onToggleFavorite(item.entry) },
+                                        onSpeakWord = onSpeakWord,
+                                        modifier = Modifier.padding(horizontal = 16.dp)
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -523,8 +712,15 @@ fun HomeScreen(
 private fun BlueDictionaryHeader(
     totalWords: Int,
     favoriteCount: Int,
+    themeMode: ThemeMode,
+    onCycleThemeMode: () -> Unit,
     onExportClick: () -> Unit
 ) {
+    val themeIcon = when (themeMode) {
+        ThemeMode.SYSTEM -> Icons.Rounded.BrightnessAuto
+        ThemeMode.LIGHT -> Icons.Rounded.LightMode
+        ThemeMode.DARK -> Icons.Rounded.DarkMode
+    }
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(bottomStart = 34.dp, bottomEnd = 34.dp),
@@ -584,32 +780,58 @@ private fun BlueDictionaryHeader(
                         }
                     }
 
-                    Surface(
-                        modifier = Modifier
-                            .minimumInteractiveComponentSize()
-                            .clip(RoundedCornerShape(50))
-                            .clickable { onExportClick() }
-                            .testTag("export_button"),
-                        shape = RoundedCornerShape(50),
-                        color = Color.White.copy(alpha = 0.22f),
-                        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.4f))
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        Surface(
+                            modifier = Modifier
+                                .minimumInteractiveComponentSize()
+                                .size(44.dp)
+                                .clip(CircleShape)
+                                .clickable { onCycleThemeMode() }
+                                .testTag("theme_toggle_button"),
+                            shape = CircleShape,
+                            color = Color.White.copy(alpha = 0.22f),
+                            border = BorderStroke(1.dp, Color.White.copy(alpha = 0.4f))
                         ) {
-                            Icon(
-                                imageVector = Icons.Rounded.Download,
-                                contentDescription = "تصدير القاموس",
-                                tint = Color.White,
-                                modifier = Modifier.size(18.dp)
-                            )
-                            Text(
-                                text = "تصدير",
-                                style = MaterialTheme.typography.labelLarge,
-                                color = Color.White
-                            )
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    imageVector = themeIcon,
+                                    contentDescription = "تبديل المظهر (${themeMode.labelAr})",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        }
+
+                        Surface(
+                            modifier = Modifier
+                                .minimumInteractiveComponentSize()
+                                .clip(RoundedCornerShape(50))
+                                .clickable { onExportClick() }
+                                .testTag("export_button"),
+                            shape = RoundedCornerShape(50),
+                            color = Color.White.copy(alpha = 0.22f),
+                            border = BorderStroke(1.dp, Color.White.copy(alpha = 0.4f))
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Download,
+                                    contentDescription = "تصدير القاموس",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Text(
+                                    text = "تصدير",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = Color.White
+                                )
+                            }
                         }
                     }
                 }
@@ -656,179 +878,6 @@ private fun HeaderStatPill(
                 style = MaterialTheme.typography.labelLarge,
                 color = Color.White
             )
-        }
-    }
-}
-
-@OptIn(ExperimentalLayoutApi::class)
-@Composable
-private fun WordSummaryCard(
-    entry: WordEntry,
-    onClick: () -> Unit,
-    onToggleFavorite: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    Surface(
-        modifier = modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(26.dp))
-            .clickable { onClick() }
-            .testTag("word_card_${entry.id}"),
-        shape = RoundedCornerShape(26.dp),
-        color = MaterialTheme.colorScheme.surface,
-        tonalElevation = 1.dp,
-        shadowElevation = 2.dp,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
-    ) {
-        Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.Top
-            ) {
-                Column(
-                    modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    Text(
-                        text = entry.displayTitle(),
-                        style = MaterialTheme.typography.titleLarge,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                    if (entry.arabicMeaning.isNotBlank() && entry.word.isNotBlank()) {
-                        Text(
-                            text = entry.arabicMeaning,
-                            style = MaterialTheme.typography.titleMedium,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                    }
-                }
-
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    SrsStatusBadge(entry = entry)
-                    IconButton(
-                        onClick = onToggleFavorite,
-                        modifier = Modifier.minimumInteractiveComponentSize()
-                    ) {
-                        Icon(
-                            imageVector = if (entry.isFavorite) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
-                            contentDescription = if (entry.isFavorite) "إزالة من المفضلة" else "إضافة للمفضلة",
-                            tint = if (entry.isFavorite) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-            }
-
-            // Books & Parts of Speech Pills
-            if (entry.books.isNotEmpty() || entry.partsOfSpeech.isNotEmpty()) {
-                FlowRow(
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    entry.books.forEach { book ->
-                        BookPillBadge(bookName = book)
-                    }
-                    entry.partsOfSpeech.forEach { pos ->
-                        Surface(
-                            shape = RoundedCornerShape(50),
-                            color = MaterialTheme.colorScheme.surfaceVariant
-                        ) {
-                            Text(
-                                text = pos,
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
-                            )
-                        }
-                    }
-                }
-            }
-
-            // Locations summary pills
-            val validLocations = entry.locations.filter { it.isNotBlank() }
-            if (validLocations.isNotEmpty()) {
-                FlowRow(
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    validLocations.take(3).forEach { loc ->
-                        Surface(
-                            shape = RoundedCornerShape(50),
-                            color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(4.dp)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Rounded.LocationOn,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.size(13.dp)
-                                )
-                                Text(
-                                    text = loc.formattedLabel(),
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = MaterialTheme.colorScheme.onPrimaryContainer
-                                )
-                            }
-                        }
-                    }
-                    if (validLocations.size > 3) {
-                        Text(
-                            text = "+${validLocations.size - 3} مواقع",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.align(Alignment.CenterVertically)
-                        )
-                    }
-                }
-            }
-
-            // Quick preview of synonyms or notes
-            if (entry.synonyms.isNotEmpty()) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    Text(
-                        text = "مرادفات:",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    entry.synonyms.take(3).forEach { syn ->
-                        Surface(
-                            shape = RoundedCornerShape(50),
-                            color = SynonymChipBg
-                        ) {
-                            Text(
-                                text = syn,
-                                style = MaterialTheme.typography.labelMedium,
-                                color = SynonymChipText,
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
-                            )
-                        }
-                    }
-                }
-            }
-
-            val previewNote = entry.importantNotes.ifBlank { entry.notes.ifBlank { entry.definition } }
-            if (previewNote.isNotBlank()) {
-                Text(
-                    text = previewNote,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
         }
     }
 }

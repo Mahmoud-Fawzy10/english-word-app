@@ -19,10 +19,12 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.automirrored.rounded.VolumeUp
 import androidx.compose.material.icons.rounded.AutoStories
 import androidx.compose.material.icons.rounded.CompareArrows
 import androidx.compose.material.icons.rounded.ContentCopy
@@ -34,8 +36,6 @@ import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.Lightbulb
 import androidx.compose.material.icons.rounded.LocationOn
 import androidx.compose.material.icons.rounded.MenuBook
-import androidx.compose.material.icons.rounded.Psychology
-import androidx.compose.material.icons.rounded.Translate
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -70,15 +70,10 @@ import com.example.ui.components.BookPillBadge
 import com.example.ui.components.ManualSrsScheduleDialog
 import com.example.ui.components.RoundedSectionCard
 import com.example.ui.components.SrsDetailCard
-import com.example.ui.theme.AntonymChipBg
-import com.example.ui.theme.AntonymChipText
 import com.example.ui.theme.CobaltDark
 import com.example.ui.theme.CobaltPrimary
-import com.example.ui.theme.ImportantNoteBg
-import com.example.ui.theme.ImportantNoteBorder
+import com.example.ui.theme.LocalQamusiColors
 import com.example.ui.theme.SkyAccent
-import com.example.ui.theme.SynonymChipBg
-import com.example.ui.theme.SynonymChipText
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
@@ -88,12 +83,14 @@ fun WordDetailScreen(
     onEditClick: (Long) -> Unit,
     onDeleteConfirm: (Long) -> Unit,
     onToggleFavorite: (WordEntry) -> Unit,
+    onSpeakWord: (String) -> Unit,
     onReviewNowClick: (WordEntry) -> Unit,
     onManualSrsUpdate: (WordEntry, Int, Float, Boolean) -> Unit,
     onCopiedMessage: (String) -> Unit
 ) {
     BackHandler { onBack() }
 
+    val palette = LocalQamusiColors.current
     var showDeleteDialog by remember { mutableStateOf(false) }
     var showManualSrsDialog by remember { mutableStateOf(false) }
     val clipboard = LocalClipboardManager.current
@@ -219,7 +216,7 @@ fun WordDetailScreen(
                         .padding(horizontal = 16.dp, vertical = 10.dp),
                     verticalArrangement = Arrangement.spacedBy(14.dp)
                 ) {
-                    // Main Hero Word Card
+                    // Main Hero Word Card with IPA + Offline Speaker
                     Surface(
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(30.dp),
@@ -240,11 +237,58 @@ fun WordDetailScreen(
                                     .padding(22.dp),
                                 verticalArrangement = Arrangement.spacedBy(10.dp)
                             ) {
-                                Text(
-                                    text = word.displayTitle(),
-                                    style = MaterialTheme.typography.displaySmall,
-                                    color = Color.White
-                                )
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(
+                                        modifier = Modifier.weight(1f),
+                                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                                    ) {
+                                        Text(
+                                            text = word.displayTitle(),
+                                            style = MaterialTheme.typography.displaySmall,
+                                            color = Color.White
+                                        )
+                                        if (word.ipa.isNotBlank()) {
+                                            Surface(
+                                                shape = RoundedCornerShape(50),
+                                                color = Color.White.copy(alpha = 0.2f)
+                                            ) {
+                                                Text(
+                                                    text = word.ipa,
+                                                    style = MaterialTheme.typography.titleSmall,
+                                                    color = Color.White,
+                                                    modifier = Modifier
+                                                        .padding(horizontal = 12.dp, vertical = 4.dp)
+                                                        .testTag("detail_ipa_text")
+                                                )
+                                            }
+                                        }
+                                    }
+
+                                    if (word.word.isNotBlank()) {
+                                        Surface(
+                                            shape = CircleShape,
+                                            color = Color.White.copy(alpha = 0.22f)
+                                        ) {
+                                            IconButton(
+                                                onClick = { onSpeakWord(word.word) },
+                                                modifier = Modifier
+                                                    .minimumInteractiveComponentSize()
+                                                    .testTag("detail_speak_button")
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.AutoMirrored.Rounded.VolumeUp,
+                                                    contentDescription = "نطق الكلمة محلياً",
+                                                    tint = Color.White
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+
                                 if (word.arabicMeaning.isNotBlank() && word.word.isNotBlank()) {
                                     Text(
                                         text = word.arabicMeaning,
@@ -337,10 +381,10 @@ fun WordDetailScreen(
                                     verticalArrangement = Arrangement.spacedBy(8.dp)
                                 ) {
                                     word.synonyms.forEach { syn ->
-                                        Surface(shape = RoundedCornerShape(50), color = SynonymChipBg) {
+                                        Surface(shape = RoundedCornerShape(50), color = palette.synonymBg) {
                                             Text(
                                                 text = syn,
-                                                color = SynonymChipText,
+                                                color = palette.synonymText,
                                                 style = MaterialTheme.typography.bodyMedium,
                                                 modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
                                             )
@@ -355,10 +399,10 @@ fun WordDetailScreen(
                                     verticalArrangement = Arrangement.spacedBy(8.dp)
                                 ) {
                                     word.antonyms.forEach { ant ->
-                                        Surface(shape = RoundedCornerShape(50), color = AntonymChipBg) {
+                                        Surface(shape = RoundedCornerShape(50), color = palette.antonymBg) {
                                             Text(
                                                 text = ant,
-                                                color = AntonymChipText,
+                                                color = palette.antonymText,
                                                 style = MaterialTheme.typography.bodyMedium,
                                                 modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
                                             )
@@ -400,8 +444,8 @@ fun WordDetailScreen(
                                 Surface(
                                     modifier = Modifier.fillMaxWidth(),
                                     shape = RoundedCornerShape(20.dp),
-                                    color = ImportantNoteBg,
-                                    border = BorderStroke(1.dp, ImportantNoteBorder)
+                                    color = palette.importantNoteBg,
+                                    border = BorderStroke(1.dp, palette.importantNoteBorder)
                                 ) {
                                     Column(
                                         modifier = Modifier.padding(14.dp),
@@ -511,6 +555,7 @@ private fun DetailFieldBlock(label: String, content: String) {
 
 private fun formatWordForCopy(word: WordEntry): String = buildString {
     if (word.word.isNotBlank()) appendLine(word.word)
+    if (word.ipa.isNotBlank()) appendLine("النطق (IPA): ${word.ipa}")
     if (word.arabicMeaning.isNotBlank()) appendLine("المعنى: ${word.arabicMeaning}")
     if (word.books.isNotEmpty()) appendLine("الكتاب: ${word.books.joinToString("، ")}")
     val locs = word.locations.filter { it.isNotBlank() }.joinToString(" | ") { it.formattedLabel() }

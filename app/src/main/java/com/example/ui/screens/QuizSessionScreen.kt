@@ -2,6 +2,11 @@ package com.example.ui.screens
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -29,6 +34,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.automirrored.rounded.VolumeUp
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.EditCalendar
@@ -62,22 +68,23 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.example.data.model.WordEntry
-import com.example.domain.QuizQuestionType
+import com.example.data.repository.WordRepository
+import com.example.domain.QuestionInteractionKind
 import com.example.domain.SrsGrade
 import com.example.domain.SrsScheduler
 import com.example.ui.components.BookPillBadge
 import com.example.ui.components.ManualSrsScheduleDialog
 import com.example.ui.theme.CobaltDark
 import com.example.ui.theme.CobaltPrimary
+import com.example.ui.theme.LocalQamusiColors
 import com.example.ui.theme.SkyAccent
-import com.example.ui.theme.SynonymChipBg
-import com.example.ui.theme.SynonymChipText
 import com.example.ui.viewmodel.QuizSessionState
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
@@ -91,12 +98,14 @@ fun QuizSessionScreen(
     onSubmitTyping: () -> Unit,
     onNextQuestion: () -> Unit,
     onRestart: () -> Unit,
+    onSpeakWord: (String) -> Unit,
     onManualSchedule: (WordEntry, Int, Float, Boolean) -> Unit,
     onOpenWordDetail: (Long) -> Unit,
     onExit: () -> Unit
 ) {
     BackHandler { onExit() }
 
+    val palette = LocalQamusiColors.current
     var editingSrsWord by remember { mutableStateOf<WordEntry?>(null) }
     var showHintLetter by remember(session.currentIndex) { mutableStateOf(false) }
 
@@ -167,6 +176,11 @@ fun QuizSessionScreen(
                 val question = session.currentQuestion ?: return@Box
                 val entry = question.entry
                 val progress = (session.currentIndex + 1f) / session.questions.size.coerceAtLeast(1)
+                val cardScale by animateFloatAsState(
+                    targetValue = if (session.isAnswerRevealed) 1.01f else 1f,
+                    animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
+                    label = "card_scale"
+                )
 
                 Column(
                     modifier = Modifier
@@ -186,9 +200,11 @@ fun QuizSessionScreen(
                         trackColor = MaterialTheme.colorScheme.primaryContainer
                     )
 
-                    // Prompt Card
+                    // Prompt Card with Question Type Badge & Offline TTS
                     Surface(
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .graphicsLayer(scaleX = cardScale, scaleY = cardScale),
                         shape = RoundedCornerShape(30.dp),
                         color = MaterialTheme.colorScheme.surface,
                         shadowElevation = 4.dp,
@@ -201,6 +217,39 @@ fun QuizSessionScreen(
                             horizontalAlignment = Alignment.CenterHorizontally,
                             verticalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Surface(
+                                    shape = RoundedCornerShape(50),
+                                    color = MaterialTheme.colorScheme.primaryContainer
+                                ) {
+                                    Text(
+                                        text = question.badgeLabel,
+                                        style = MaterialTheme.typography.labelLarge,
+                                        color = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp)
+                                    )
+                                }
+
+                                if (entry.word.isNotBlank()) {
+                                    IconButton(
+                                        onClick = { onSpeakWord(entry.word) },
+                                        modifier = Modifier
+                                            .minimumInteractiveComponentSize()
+                                            .testTag("quiz_speak_button")
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.AutoMirrored.Rounded.VolumeUp,
+                                            contentDescription = "نطق الكلمة",
+                                            tint = MaterialTheme.colorScheme.primary
+                                        )
+                                    }
+                                }
+                            }
+
                             if (entry.books.isNotEmpty()) {
                                 FlowRow(
                                     horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -212,7 +261,7 @@ fun QuizSessionScreen(
 
                             Text(
                                 text = question.promptText,
-                                style = MaterialTheme.typography.displaySmall,
+                                style = MaterialTheme.typography.headlineMedium,
                                 color = MaterialTheme.colorScheme.onSurface,
                                 textAlign = TextAlign.Center
                             )
@@ -228,8 +277,8 @@ fun QuizSessionScreen(
                         }
                     }
 
-                    when (session.config.questionType) {
-                        QuizQuestionType.FLASHCARD_SRS -> {
+                    when (question.interactionKind) {
+                        QuestionInteractionKind.FLASHCARD -> {
                             if (!session.isAnswerRevealed) {
                                 Button(
                                     onClick = onRevealFlashcard,
@@ -243,117 +292,149 @@ fun QuizSessionScreen(
                                     Spacer(modifier = Modifier.width(8.dp))
                                     Text("إظهار الإجابة والتفاصيل", style = MaterialTheme.typography.titleMedium)
                                 }
-                            } else {
-                                // Revealed Answer Card
-                                Surface(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    shape = RoundedCornerShape(26.dp),
-                                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f),
-                                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
-                                ) {
-                                    Column(
-                                        modifier = Modifier.padding(18.dp),
-                                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                            }
+
+                            AnimatedVisibility(
+                                visible = session.isAnswerRevealed,
+                                enter = fadeIn() + expandVertically(animationSpec = spring(stiffness = Spring.StiffnessMediumLow))
+                            ) {
+                                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                                    Surface(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        shape = RoundedCornerShape(26.dp),
+                                        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.65f),
+                                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
                                     ) {
-                                        Text(
-                                            text = question.answerText,
-                                            style = MaterialTheme.typography.headlineSmall,
-                                            color = MaterialTheme.colorScheme.primary,
-                                            fontWeight = FontWeight.Bold
-                                        )
-                                        if (entry.synonyms.isNotEmpty()) {
-                                            FlowRow(
-                                                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                                verticalArrangement = Arrangement.spacedBy(6.dp)
-                                            ) {
-                                                entry.synonyms.forEach { syn ->
-                                                    Surface(shape = RoundedCornerShape(50), color = SynonymChipBg) {
-                                                        Text(
-                                                            text = syn,
-                                                            color = SynonymChipText,
-                                                            style = MaterialTheme.typography.labelMedium,
-                                                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
-                                                        )
+                                        Column(
+                                            modifier = Modifier.padding(18.dp),
+                                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                                        ) {
+                                            Text(
+                                                text = question.answerText,
+                                                style = MaterialTheme.typography.headlineSmall,
+                                                color = MaterialTheme.colorScheme.primary,
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                            if (entry.ipa.isNotBlank()) {
+                                                Text(
+                                                    text = "النطق: ${entry.ipa}",
+                                                    style = MaterialTheme.typography.bodyMedium,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                            }
+                                            if (entry.synonyms.isNotEmpty()) {
+                                                FlowRow(
+                                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                                                ) {
+                                                    entry.synonyms.forEach { syn ->
+                                                        Surface(shape = RoundedCornerShape(50), color = palette.synonymBg) {
+                                                            Text(
+                                                                text = syn,
+                                                                color = palette.synonymText,
+                                                                style = MaterialTheme.typography.labelMedium,
+                                                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                                                            )
+                                                        }
                                                     }
                                                 }
                                             }
-                                        }
-                                        if (entry.definition.isNotBlank()) {
-                                            Text("التعريف: ${entry.definition}", style = MaterialTheme.typography.bodyMedium)
-                                        }
-                                        if (entry.derivatives.isNotBlank()) {
-                                            Text("الاشتقاقات: ${entry.derivatives}", style = MaterialTheme.typography.bodyMedium)
-                                        }
-                                        if (entry.expressions.isNotBlank()) {
-                                            Text("التعبيرات: ${entry.expressions}", style = MaterialTheme.typography.bodyMedium)
-                                        }
-                                        val note = entry.importantNotes.ifBlank { entry.notes }
-                                        if (note.isNotBlank()) {
-                                            Text("ملاحظات: $note", style = MaterialTheme.typography.bodyMedium)
+                                            if (entry.antonyms.isNotEmpty()) {
+                                                FlowRow(
+                                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                                                ) {
+                                                    entry.antonyms.forEach { ant ->
+                                                        Surface(shape = RoundedCornerShape(50), color = palette.antonymBg) {
+                                                            Text(
+                                                                text = "ضد: $ant",
+                                                                color = palette.antonymText,
+                                                                style = MaterialTheme.typography.labelMedium,
+                                                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                                                            )
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            if (entry.definition.isNotBlank()) {
+                                                Text("التعريف: ${entry.definition}", style = MaterialTheme.typography.bodyMedium)
+                                            }
+                                            if (entry.derivatives.isNotBlank()) {
+                                                Text("الاشتقاقات: ${entry.derivatives}", style = MaterialTheme.typography.bodyMedium)
+                                            }
+                                            if (entry.expressions.isNotBlank()) {
+                                                Text("التعبيرات: ${entry.expressions}", style = MaterialTheme.typography.bodyMedium)
+                                            }
+                                            val note = entry.importantNotes.ifBlank { entry.notes }
+                                            if (note.isNotBlank()) {
+                                                Text("ملاحظات: $note", style = MaterialTheme.typography.bodyMedium)
+                                            }
                                         }
                                     }
-                                }
 
-                                Text(
-                                    text = "كيف كان تذكرك للكلمة؟ (يُحدّث جدول المراجعة تلقائياً)",
-                                    style = MaterialTheme.typography.labelLarge,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
+                                    Text(
+                                        text = "كيف كان تذكرك للكلمة؟ (يُحدّث جدول المراجعة تلقائياً)",
+                                        style = MaterialTheme.typography.labelLarge,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
 
-                                // 4 SRS Rating Pills with Live Interval Previews
-                                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                    ) {
-                                        SrsGradePillButton(
-                                            grade = SrsGrade.AGAIN,
-                                            entry = entry,
-                                            bgColor = Color(0xFFFEE2E2),
-                                            fgColor = Color(0xFFB91C1C),
-                                            onClick = { onSubmitFlashcardGrade(SrsGrade.AGAIN) },
-                                            modifier = Modifier.weight(1f)
-                                        )
-                                        SrsGradePillButton(
-                                            grade = SrsGrade.HARD,
-                                            entry = entry,
-                                            bgColor = Color(0xFFFEF3C7),
-                                            fgColor = Color(0xFFB45309),
-                                            onClick = { onSubmitFlashcardGrade(SrsGrade.HARD) },
-                                            modifier = Modifier.weight(1f)
-                                        )
-                                    }
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                    ) {
-                                        SrsGradePillButton(
-                                            grade = SrsGrade.GOOD,
-                                            entry = entry,
-                                            bgColor = Color(0xFFDBEAFE),
-                                            fgColor = Color(0xFF1D4ED8),
-                                            onClick = { onSubmitFlashcardGrade(SrsGrade.GOOD) },
-                                            modifier = Modifier.weight(1f)
-                                        )
-                                        SrsGradePillButton(
-                                            grade = SrsGrade.EASY,
-                                            entry = entry,
-                                            bgColor = Color(0xFFDCFCE7),
-                                            fgColor = Color(0xFF15803D),
-                                            onClick = { onSubmitFlashcardGrade(SrsGrade.EASY) },
-                                            modifier = Modifier.weight(1f)
-                                        )
+                                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                        ) {
+                                            SrsGradePillButton(
+                                                grade = SrsGrade.AGAIN,
+                                                entry = entry,
+                                                bgColor = palette.srsAgainBg,
+                                                fgColor = palette.srsAgainText,
+                                                onClick = { onSubmitFlashcardGrade(SrsGrade.AGAIN) },
+                                                modifier = Modifier.weight(1f)
+                                            )
+                                            SrsGradePillButton(
+                                                grade = SrsGrade.HARD,
+                                                entry = entry,
+                                                bgColor = palette.srsHardBg,
+                                                fgColor = palette.srsHardText,
+                                                onClick = { onSubmitFlashcardGrade(SrsGrade.HARD) },
+                                                modifier = Modifier.weight(1f)
+                                            )
+                                        }
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                        ) {
+                                            SrsGradePillButton(
+                                                grade = SrsGrade.GOOD,
+                                                entry = entry,
+                                                bgColor = palette.srsGoodBg,
+                                                fgColor = palette.srsGoodText,
+                                                onClick = { onSubmitFlashcardGrade(SrsGrade.GOOD) },
+                                                modifier = Modifier.weight(1f)
+                                            )
+                                            SrsGradePillButton(
+                                                grade = SrsGrade.EASY,
+                                                entry = entry,
+                                                bgColor = palette.srsEasyBg,
+                                                fgColor = palette.srsEasyText,
+                                                onClick = { onSubmitFlashcardGrade(SrsGrade.EASY) },
+                                                modifier = Modifier.weight(1f)
+                                            )
+                                        }
                                     }
                                 }
                             }
                         }
 
-                        QuizQuestionType.MULTIPLE_CHOICE -> {
+                        QuestionInteractionKind.MCQ -> {
                             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                                 question.options.forEachIndexed { idx, option ->
                                     val answered = session.selectedMcqOption != null
                                     val isSelected = session.selectedMcqOption == option
-                                    val isRightOption = option.trim().equals(question.answerText.trim(), ignoreCase = true)
+                                    val normOpt = WordRepository.normalizeKey(option)
+                                    val isRightOption = question.acceptedAnswers.any {
+                                        WordRepository.normalizeKey(it) == normOpt
+                                    } || normOpt == WordRepository.normalizeKey(question.answerText)
 
                                     val (bg, border, textColor) = when {
                                         !answered -> Triple(
@@ -362,14 +443,14 @@ fun QuizSessionScreen(
                                             MaterialTheme.colorScheme.onSurface
                                         )
                                         isRightOption -> Triple(
-                                            Color(0xFFDCFCE7),
-                                            Color(0xFF16A34A),
-                                            Color(0xFF14532D)
+                                            palette.successBg,
+                                            palette.successBorder,
+                                            palette.successText
                                         )
                                         isSelected && !isRightOption -> Triple(
-                                            Color(0xFFFEE2E2),
-                                            Color(0xFFDC2626),
-                                            Color(0xFF7F1D1D)
+                                            palette.dangerBg,
+                                            palette.dangerBorder,
+                                            palette.dangerText
                                         )
                                         else -> Triple(
                                             MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
@@ -400,9 +481,17 @@ fun QuizSessionScreen(
                                                 modifier = Modifier.weight(1f)
                                             )
                                             if (answered && isRightOption) {
-                                                Icon(Icons.Rounded.CheckCircle, contentDescription = null, tint = Color(0xFF16A34A))
+                                                Icon(
+                                                    Icons.Rounded.CheckCircle,
+                                                    contentDescription = null,
+                                                    tint = palette.successBorder
+                                                )
                                             } else if (answered && isSelected && !isRightOption) {
-                                                Icon(Icons.Rounded.Close, contentDescription = null, tint = Color(0xFFDC2626))
+                                                Icon(
+                                                    Icons.Rounded.Close,
+                                                    contentDescription = null,
+                                                    tint = palette.dangerBorder
+                                                )
                                             }
                                         }
                                     }
@@ -426,8 +515,10 @@ fun QuizSessionScreen(
                             }
                         }
 
-                        QuizQuestionType.TYPING -> {
+                        QuestionInteractionKind.TYPING -> {
                             val checked = session.lastTypingCorrect != null
+                            val hintSample = question.acceptedAnswers.firstOrNull().orEmpty().ifBlank { question.answerText }
+
                             OutlinedTextField(
                                 value = session.typedInput,
                                 onValueChange = onTypedInputChange,
@@ -471,9 +562,9 @@ fun QuizSessionScreen(
                                         Text("تحقق")
                                     }
                                 }
-                                if (showHintLetter && question.answerText.isNotBlank()) {
+                                if (showHintLetter && hintSample.isNotBlank()) {
                                     Text(
-                                        text = "تبدأ بـ: ${question.answerText.take(2)}... (${question.answerText.length} حرف)",
+                                        text = "تبدأ بـ: ${hintSample.take(2)}... (${hintSample.length} حرف)",
                                         style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.primary
                                     )
@@ -483,17 +574,21 @@ fun QuizSessionScreen(
                                 Surface(
                                     modifier = Modifier.fillMaxWidth(),
                                     shape = RoundedCornerShape(22.dp),
-                                    color = if (ok) Color(0xFFDCFCE7) else Color(0xFFFEE2E2),
-                                    border = BorderStroke(1.dp, if (ok) Color(0xFF16A34A) else Color(0xFFDC2626))
+                                    color = if (ok) palette.successBg else palette.dangerBg,
+                                    border = BorderStroke(1.dp, if (ok) palette.successBorder else palette.dangerBorder)
                                 ) {
                                     Column(
                                         modifier = Modifier.padding(16.dp),
                                         verticalArrangement = Arrangement.spacedBy(4.dp)
                                     ) {
                                         Text(
-                                            text = if (ok) "إجابة صحيحة! تم جدولة المراجعة القادمة" else "الإجابة الصحيحة هي: ${question.answerText}",
+                                            text = if (ok) {
+                                                "إجابة صحيحة! تم جدولة المراجعة القادمة"
+                                            } else {
+                                                "الإجابة الصحيحة: ${question.answerText}"
+                                            },
                                             style = MaterialTheme.typography.titleMedium,
-                                            color = if (ok) Color(0xFF14532D) else Color(0xFF7F1D1D)
+                                            color = if (ok) palette.successText else palette.dangerText
                                         )
                                     }
                                 }
@@ -578,6 +673,7 @@ private fun QuizSummaryContent(
     onRestart: () -> Unit,
     onExit: () -> Unit
 ) {
+    val palette = LocalQamusiColors.current
     val total = session.records.size.coerceAtLeast(1)
     val correct = session.records.count { it.isCorrect }
     val percent = (correct * 100) / total
@@ -639,7 +735,7 @@ private fun QuizSummaryContent(
                 color = MaterialTheme.colorScheme.surface,
                 border = BorderStroke(
                     1.dp,
-                    if (rec.isCorrect) Color(0xFF86EFAC) else Color(0xFFFCA5A5)
+                    if (rec.isCorrect) palette.successBorder else palette.dangerBorder
                 )
             ) {
                 Row(
@@ -680,7 +776,7 @@ private fun QuizSummaryContent(
                         Icon(
                             imageVector = if (rec.isCorrect) Icons.Rounded.CheckCircle else Icons.Rounded.Close,
                             contentDescription = null,
-                            tint = if (rec.isCorrect) Color(0xFF16A34A) else Color(0xFFDC2626)
+                            tint = if (rec.isCorrect) palette.successBorder else palette.dangerBorder
                         )
                     }
                 }

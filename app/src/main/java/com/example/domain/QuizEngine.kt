@@ -13,12 +13,21 @@ enum class QuizScopeMode(val labelAr: String, val descriptionAr: String) {
 enum class QuizQuestionType(val labelAr: String) {
     FLASHCARD_SRS("بطاقات استرجاع (SRS)"),
     MULTIPLE_CHOICE("اختيار من متعدد"),
-    TYPING("كتابة الكلمة")
+    TYPING("كتابة الكلمة / المعنى"),
+    SYNONYMS("اختبار المرادفات"),
+    ANTONYMS("اختبار المضادات"),
+    MIXED("اختبار شامل متنوع")
 }
 
 enum class QuizDirection(val labelAr: String) {
     WORD_TO_MEANING("الكلمة ← المعنى"),
     MEANING_TO_WORD("المعنى ← الكلمة")
+}
+
+enum class QuestionInteractionKind {
+    FLASHCARD,
+    MCQ,
+    TYPING
 }
 
 data class QuizConfig(
@@ -34,13 +43,17 @@ data class QuizConfig(
     val pageTo: String = "",
     val favoritesOnly: Boolean = false,
     val shuffle: Boolean = true,
+    val requeueForgottenCards: Boolean = true,
     val questionLimit: Int = 10 // 0 means All matching words
 )
 
 data class QuizQuestionItem(
     val entry: WordEntry,
+    val interactionKind: QuestionInteractionKind,
+    val badgeLabel: String,
     val promptText: String,
     val answerText: String,
+    val acceptedAnswers: List<String>,
     val hintText: String,
     val options: List<String> = emptyList()
 )
@@ -64,6 +77,13 @@ object QuizEngine {
                 QuizQuestionType.FLASHCARD_SRS -> entry.hasAnyContent()
                 QuizQuestionType.MULTIPLE_CHOICE,
                 QuizQuestionType.TYPING -> entry.word.isNotBlank() && entry.arabicMeaning.isNotBlank()
+                QuizQuestionType.SYNONYMS -> entry.word.isNotBlank() && entry.synonyms.isNotEmpty()
+                QuizQuestionType.ANTONYMS -> entry.word.isNotBlank() && entry.antonyms.isNotEmpty()
+                QuizQuestionType.MIXED -> {
+                    (entry.word.isNotBlank() && entry.arabicMeaning.isNotBlank()) ||
+                        (entry.word.isNotBlank() && entry.synonyms.isNotEmpty()) ||
+                        (entry.word.isNotBlank() && entry.antonyms.isNotEmpty())
+                }
             }
         }
 
@@ -124,51 +144,214 @@ object QuizEngine {
         allWordsPool: List<WordEntry>,
         config: QuizConfig
     ): List<QuizQuestionItem> {
-        return selectedWords.map { entry ->
-            val prompt = when (config.direction) {
-                QuizDirection.WORD_TO_MEANING -> entry.word.ifBlank { entry.displayTitle() }
-                QuizDirection.MEANING_TO_WORD -> entry.arabicMeaning.ifBlank { entry.definition.ifBlank { entry.displayTitle() } }
-            }
-            val answer = when (config.direction) {
-                QuizDirection.WORD_TO_MEANING -> entry.arabicMeaning.ifBlank { entry.definition.ifBlank { entry.displayTitle() } }
-                QuizDirection.MEANING_TO_WORD -> entry.word.ifBlank { entry.displayTitle() }
-            }
-            val hint = buildString {
-                if (entry.partsOfSpeech.isNotEmpty()) append(entry.partsOfSpeech.joinToString("، "))
-                val locs = entry.locations.filter { it.isNotBlank() }.take(2).joinToString(" • ") { it.formattedLabel() }
-                if (locs.isNotBlank()) {
-                    if (isNotEmpty()) append("  |  ")
-                    append(locs)
-                }
+        return selectedWords.mapIndexed { index, entry ->
+            val effectiveType = when (config.questionType) {
+                QuizQuestionType.MIXED -> pickMixedTypeFor(entry, index)
+                else -> config.questionType
             }
 
-            val options = if (config.questionType == QuizQuestionType.MULTIPLE_CHOICE) {
-                val distractors = allWordsPool
-                    .asSequence()
-                    .filter { it.id != entry.id }
-                    .map { candidate ->
-                        when (config.direction) {
-                            QuizDirection.WORD_TO_MEANING -> candidate.arabicMeaning
-                            QuizDirection.MEANING_TO_WORD -> candidate.word
-                        }.trim()
-                    }
-                    .filter { it.isNotBlank() && !it.equals(answer.trim(), ignoreCase = true) }
-                    .distinct()
-                    .shuffled()
-                    .take(3)
-                    .toList()
-                (distractors + answer).distinct().shuffled()
-            } else {
-                emptyList()
+            when (effectiveType) {
+                QuizQuestionType.FLASHCARD_SRS -> buildFlashcardQuestion(entry, config)
+                QuizQuestionType.MULTIPLE_CHOICE -> buildMeaningMcqQuestion(entry, allWordsPool, config)
+                QuizQuestionType.TYPING -> buildMeaningTypingQuestion(entry, config)
+                QuizQuestionType.SYNONYMS -> buildSynonymQuestion(entry, allWordsPool)
+                QuizQuestionType.ANTONYMS -> buildAntonymQuestion(entry, allWordsPool)
+                QuizQuestionType.MIXED -> buildMeaningMcqQuestion(entry, allWordsPool, config)
             }
+        }
+    }
 
-            QuizQuestionItem(
-                entry = entry,
-                promptText = prompt,
-                answerText = answer,
-                hintText = hint,
-                options = options
-            )
+    private fun pickMixedTypeFor(entry: WordEntry, index: Int): QuizQuestionType {
+        val candidates = buildList {
+            if (entry.word.isNotBlank() && entry.arabicMeaning.isNotBlank()) {
+                add(QuizQuestionType.MULTIPLE_CHOICE)
+                add(QuizQuestionType.TYPING)
+            }
+            if (entry.word.isNotBlank() && entry.synonyms.isNotEmpty()) {
+                add(QuizQuestionType.SYNONYMS)
+            }
+            if (entry.word.isNotBlank() && entry.antonyms.isNotEmpty()) {
+                add(QuizQuestionType.ANTONYMS)
+            }
+        }
+        return if (candidates.isEmpty()) QuizQuestionType.FLASHCARD_SRS else candidates[index % candidates.size]
+    }
+
+    private fun buildFlashcardQuestion(entry: WordEntry, config: QuizConfig): QuizQuestionItem {
+        val prompt = when (config.direction) {
+            QuizDirection.WORD_TO_MEANING -> entry.word.ifBlank { entry.displayTitle() }
+            QuizDirection.MEANING_TO_WORD -> entry.arabicMeaning.ifBlank { entry.definition.ifBlank { entry.displayTitle() } }
+        }
+        val answer = when (config.direction) {
+            QuizDirection.WORD_TO_MEANING -> entry.arabicMeaning.ifBlank { entry.definition.ifBlank { entry.displayTitle() } }
+            QuizDirection.MEANING_TO_WORD -> entry.word.ifBlank { entry.displayTitle() }
+        }
+        return QuizQuestionItem(
+            entry = entry,
+            interactionKind = QuestionInteractionKind.FLASHCARD,
+            badgeLabel = "بطاقة مراجعة ذكية",
+            promptText = prompt,
+            answerText = answer,
+            acceptedAnswers = listOf(answer),
+            hintText = buildHint(entry, includeIpa = config.direction == QuizDirection.WORD_TO_MEANING)
+        )
+    }
+
+    private fun buildMeaningMcqQuestion(
+        entry: WordEntry,
+        allWordsPool: List<WordEntry>,
+        config: QuizConfig
+    ): QuizQuestionItem {
+        val prompt = when (config.direction) {
+            QuizDirection.WORD_TO_MEANING -> entry.word.ifBlank { entry.displayTitle() }
+            QuizDirection.MEANING_TO_WORD -> entry.arabicMeaning.ifBlank { entry.definition.ifBlank { entry.displayTitle() } }
+        }
+        val answer = when (config.direction) {
+            QuizDirection.WORD_TO_MEANING -> entry.arabicMeaning.ifBlank { entry.definition.ifBlank { entry.displayTitle() } }
+            QuizDirection.MEANING_TO_WORD -> entry.word.ifBlank { entry.displayTitle() }
+        }
+        val distractors = allWordsPool
+            .asSequence()
+            .filter { it.id != entry.id }
+            .map { candidate ->
+                when (config.direction) {
+                    QuizDirection.WORD_TO_MEANING -> candidate.arabicMeaning
+                    QuizDirection.MEANING_TO_WORD -> candidate.word
+                }.trim()
+            }
+            .filter { it.isNotBlank() && !it.equals(answer.trim(), ignoreCase = true) }
+            .distinct()
+            .shuffled()
+            .take(3)
+            .toList()
+
+        val options = (distractors + answer).distinct().shuffled()
+        return QuizQuestionItem(
+            entry = entry,
+            interactionKind = if (options.size >= 2) QuestionInteractionKind.MCQ else QuestionInteractionKind.TYPING,
+            badgeLabel = "اختر المعنى الصحيح",
+            promptText = prompt,
+            answerText = answer,
+            acceptedAnswers = listOf(answer),
+            hintText = buildHint(entry, includeIpa = config.direction == QuizDirection.WORD_TO_MEANING),
+            options = options
+        )
+    }
+
+    private fun buildMeaningTypingQuestion(entry: WordEntry, config: QuizConfig): QuizQuestionItem {
+        val prompt = when (config.direction) {
+            QuizDirection.WORD_TO_MEANING -> entry.word.ifBlank { entry.displayTitle() }
+            QuizDirection.MEANING_TO_WORD -> entry.arabicMeaning.ifBlank { entry.definition.ifBlank { entry.displayTitle() } }
+        }
+        val answer = when (config.direction) {
+            QuizDirection.WORD_TO_MEANING -> entry.arabicMeaning.ifBlank { entry.definition.ifBlank { entry.displayTitle() } }
+            QuizDirection.MEANING_TO_WORD -> entry.word.ifBlank { entry.displayTitle() }
+        }
+        return QuizQuestionItem(
+            entry = entry,
+            interactionKind = QuestionInteractionKind.TYPING,
+            badgeLabel = if (config.direction == QuizDirection.MEANING_TO_WORD) "اكتب الكلمة بالإنجليزية" else "اكتب المعنى بالعربي",
+            promptText = prompt,
+            answerText = answer,
+            acceptedAnswers = listOf(answer),
+            hintText = buildHint(entry, includeIpa = config.direction == QuizDirection.WORD_TO_MEANING)
+        )
+    }
+
+    private fun buildSynonymQuestion(entry: WordEntry, allWordsPool: List<WordEntry>): QuizQuestionItem {
+        val validSynonyms = entry.synonyms.map { it.trim() }.filter { it.isNotBlank() }
+        val primarySyn = validSynonyms.firstOrNull().orEmpty()
+        val prompt = if (entry.arabicMeaning.isNotBlank()) {
+            "ما مرادف كلمة «${entry.word}» (${entry.arabicMeaning})؟"
+        } else {
+            "ما مرادف كلمة «${entry.word}»؟"
+        }
+        val distractorPool = allWordsPool
+            .asSequence()
+            .filter { it.id != entry.id }
+            .flatMap { cand -> (cand.synonyms + cand.antonyms + listOf(cand.word)).asSequence() }
+            .map { it.trim() }
+            .filter { cand ->
+                cand.isNotBlank() &&
+                    !cand.equals(entry.word.trim(), ignoreCase = true) &&
+                    validSynonyms.none { it.equals(cand, ignoreCase = true) }
+            }
+            .distinct()
+            .shuffled()
+            .take(3)
+            .toList()
+
+        val options = if (distractorPool.isNotEmpty() && primarySyn.isNotBlank()) {
+            (distractorPool + primarySyn).distinct().shuffled()
+        } else {
+            emptyList()
+        }
+
+        return QuizQuestionItem(
+            entry = entry,
+            interactionKind = if (options.size >= 2) QuestionInteractionKind.MCQ else QuestionInteractionKind.TYPING,
+            badgeLabel = "اختبار المرادفات (Synonym)",
+            promptText = prompt,
+            answerText = validSynonyms.joinToString(" / "),
+            acceptedAnswers = validSynonyms,
+            hintText = buildHint(entry, includeIpa = true),
+            options = options
+        )
+    }
+
+    private fun buildAntonymQuestion(entry: WordEntry, allWordsPool: List<WordEntry>): QuizQuestionItem {
+        val validAntonyms = entry.antonyms.map { it.trim() }.filter { it.isNotBlank() }
+        val primaryAnt = validAntonyms.firstOrNull().orEmpty()
+        val prompt = if (entry.arabicMeaning.isNotBlank()) {
+            "ما مضاد كلمة «${entry.word}» (${entry.arabicMeaning})؟"
+        } else {
+            "ما مضاد كلمة «${entry.word}»؟"
+        }
+        val distractorPool = allWordsPool
+            .asSequence()
+            .filter { it.id != entry.id }
+            .flatMap { cand -> (cand.antonyms + cand.synonyms + listOf(cand.word)).asSequence() }
+            .map { it.trim() }
+            .filter { cand ->
+                cand.isNotBlank() &&
+                    !cand.equals(entry.word.trim(), ignoreCase = true) &&
+                    validAntonyms.none { it.equals(cand, ignoreCase = true) }
+            }
+            .distinct()
+            .shuffled()
+            .take(3)
+            .toList()
+
+        val options = if (distractorPool.isNotEmpty() && primaryAnt.isNotBlank()) {
+            (distractorPool + primaryAnt).distinct().shuffled()
+        } else {
+            emptyList()
+        }
+
+        return QuizQuestionItem(
+            entry = entry,
+            interactionKind = if (options.size >= 2) QuestionInteractionKind.MCQ else QuestionInteractionKind.TYPING,
+            badgeLabel = "اختبار المضادات (Antonym)",
+            promptText = prompt,
+            answerText = validAntonyms.joinToString(" / "),
+            acceptedAnswers = validAntonyms,
+            hintText = buildHint(entry, includeIpa = true),
+            options = options
+        )
+    }
+
+    private fun buildHint(entry: WordEntry, includeIpa: Boolean): String = buildString {
+        if (includeIpa && entry.ipa.isNotBlank()) {
+            append(entry.ipa)
+        }
+        if (entry.partsOfSpeech.isNotEmpty()) {
+            if (isNotEmpty()) append("  •  ")
+            append(entry.partsOfSpeech.joinToString("، "))
+        }
+        val locs = entry.locations.filter { it.isNotBlank() }.take(2).joinToString(" • ") { it.formattedLabel() }
+        if (locs.isNotBlank()) {
+            if (isNotEmpty()) append("  |  ")
+            append(locs)
         }
     }
 

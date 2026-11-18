@@ -1,0 +1,10 @@
+<resources>
+    <string name="app_name">قاموسي</string>
+    <string name="hero_banner_desc">صورة تعبيرية لقاموسي الشخصي</string>
+    <string name="empty_search_desc">لا توجد نتائج مطابقة للبحث</string>
+    <string name="search_placeholder">ابحث عن كلمة، معنى، وحدة، مرادف...</string>
+    <string name="add_word_title">إضافة كلمة جديدة</string>
+    <string name="edit_word_title">تعديل الكلمة</string>
+    <string name="save_word">حفظ الكلمة</string>
+    <string name="export_title">تصدير القاموس أوفلاين</string>
+</resources>

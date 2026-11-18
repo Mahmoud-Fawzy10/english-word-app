@@ -1,0 +1,6 @@
+{
+  "name": "قاموسي",
+  "description": "قاموس شخصي أوفلاين لتنظيم كلمات المنهج ومرادفاتها وملاحظاتها مع بحث متقدم وتصدير PDF وExcel وGoogle Sheets",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

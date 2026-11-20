@@ -11,32 +11,39 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Analytics
 import androidx.compose.material.icons.rounded.Backup
+import androidx.compose.material.icons.rounded.Bolt
 import androidx.compose.material.icons.rounded.Category
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.CleaningServices
 import androidx.compose.material.icons.rounded.DarkMode
 import androidx.compose.material.icons.rounded.Download
+import androidx.compose.material.icons.rounded.EmojiEvents
 import androidx.compose.material.icons.rounded.FileUpload
-import androidx.compose.material.icons.rounded.LocalFireDepartment
 import androidx.compose.material.icons.rounded.MenuBook
 import androidx.compose.material.icons.rounded.MergeType
 import androidx.compose.material.icons.rounded.Psychology
 import androidx.compose.material.icons.rounded.Restore
+import androidx.compose.material.icons.rounded.Star
+import androidx.compose.material.icons.rounded.Tune
+import androidx.compose.material.icons.rounded.WarningAmber
 import androidx.compose.material3.Button
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
@@ -57,32 +64,47 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.data.local.ThemeMode
 import com.example.data.model.DuplicatePolicy
 import com.example.data.model.WordEntry
+import com.example.data.model.WordFormConfig
+import com.example.ui.components.QamusiCurvedBlueHeader
+import com.example.ui.components.ReferenceWhiteCard
 import com.example.ui.components.RoundedSectionCard
-import com.example.ui.theme.CobaltDark
-import com.example.ui.theme.CobaltPrimary
+import com.example.ui.components.WeeklyMasteryLineChart
 import com.example.ui.theme.LocalQamusiColors
-import com.example.ui.theme.SkyAccent
 import com.example.ui.viewmodel.DictionaryUiState
+
+private enum class StatsSegmentTab(val labelAr: String) {
+    GENERAL("عام"),
+    STUDY("المذاكرة"),
+    QUIZZES("الاختبارات")
+}
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun StatsScreen(
     uiState: DictionaryUiState,
     themeMode: ThemeMode,
+    formConfig: WordFormConfig,
     snackbarHostState: SnackbarHostState,
+    onBackToHome: () -> Unit = {},
+    onOpenAchievements: () -> Unit = {},
+    onBrowseIncompleteWords: () -> Unit = {},
     onSelectThemeMode: (ThemeMode) -> Unit,
+    onUpdateFormConfig: (WordFormConfig) -> Unit,
+    onSubmitBulkQuickAdd: (String, String?, String?) -> Unit,
     onMergeDuplicateGroup: (List<WordEntry>) -> Unit,
     onMergeAllDuplicates: () -> Unit,
     onOpenWordDetail: (Long) -> Unit,
     onStartDueReview: () -> Unit,
+    onStartHardQuiz: () -> Unit = {},
     onOpenExportSheet: () -> Unit,
     onImportCsvClick: (DuplicatePolicy) -> Unit,
     onImportXlsxClick: (DuplicatePolicy) -> Unit,
@@ -91,12 +113,16 @@ fun StatsScreen(
 ) {
     val stats = uiState.stats
     val palette = LocalQamusiColors.current
-    var selectedImportPolicy by remember { mutableStateOf(DuplicatePolicy.MERGE) }
+    var activeTab by remember { mutableStateOf(StatsSegmentTab.GENERAL) }
+    var selectedImportPolicy by remember { mutableStateOf(DuplicatePolicy.SKIP) }
     var showRestoreDialog by remember { mutableStateOf(false) }
+    var showCustomizeSheet by remember { mutableStateOf(false) }
+    var showBulkAddSheet by remember { mutableStateOf(false) }
 
     Scaffold(
         modifier = Modifier.fillMaxSize(),
         containerColor = MaterialTheme.colorScheme.background,
+        contentWindowInsets = WindowInsets(0, 0, 0, 0),
         snackbarHost = { SnackbarHost(snackbarHostState) }
     ) { innerPadding ->
         Box(
@@ -109,187 +135,351 @@ fun StatsScreen(
                 modifier = Modifier
                     .fillMaxSize()
                     .widthIn(max = 720.dp),
-                contentPadding = PaddingValues(bottom = 110.dp),
-                verticalArrangement = Arrangement.spacedBy(14.dp)
+                contentPadding = PaddingValues(bottom = 36.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                // Blue Rounded Statistics & Data Center Header
+                // 1. Curved Blue Header matching Reference Screen 6 («إحصائياتي»)
                 item {
-                    Surface(
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(bottomStart = 34.dp, bottomEnd = 34.dp),
-                        shadowElevation = 6.dp
+                    QamusiCurvedBlueHeader(
+                        title = "إحصائياتي",
+                        leadingIcon = Icons.AutoMirrored.Rounded.ArrowBack,
+                        leadingContentDescription = "العودة للرئيسية",
+                        onLeadingClick = onBackToHome,
+                        trailingIcon = Icons.Rounded.EmojiEvents,
+                        trailingContentDescription = "الإنجازات",
+                        trailingTint = Color(0xFFFDE047),
+                        onTrailingClick = onOpenAchievements,
+                        bottomCornerRadius = 28.dp
+                    )
+                }
+
+                // 2. Segmented 3-Tab Pills matching Reference Screen 6 («عام | المذاكرة | الاختبارات»)
+                item {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .background(
-                                    Brush.linearGradient(listOf(CobaltDark, CobaltPrimary, SkyAccent))
+                        StatsSegmentTab.entries.forEach { tab ->
+                            val selected = activeTab == tab
+                            Surface(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .clip(RoundedCornerShape(50))
+                                    .clickable { activeTab = tab }
+                                    .testTag("stats_tab_${tab.name.lowercase()}"),
+                                shape = RoundedCornerShape(50),
+                                color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surface,
+                                border = BorderStroke(
+                                    1.dp,
+                                    if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant
                                 )
-                                .statusBarsPadding()
-                                .padding(horizontal = 20.dp, vertical = 20.dp)
-                        ) {
-                            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                            ) {
                                 Text(
-                                    text = "الإحصائيات والبيانات",
-                                    style = MaterialTheme.typography.headlineMedium,
-                                    color = Color.White
+                                    text = tab.labelAr,
+                                    style = MaterialTheme.typography.labelLarge,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (selected) Color.White else MaterialTheme.colorScheme.onSurface,
+                                    textAlign = TextAlign.Center,
+                                    modifier = Modifier.padding(vertical = 10.dp)
                                 )
-                                Text(
-                                    text = "متابعة الحفظ والتكرار المتباعد والنسخ الاحتياطي أوفلاين بالكامل.",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = Color.White.copy(alpha = 0.9f)
-                                )
-                                FlowRow(
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                                ) {
-                                    StatsHeroPill(
-                                        icon = Icons.Rounded.LocalFireDepartment,
-                                        label = "سلسلة ${stats.streakDays} يوم"
-                                    )
-                                    StatsHeroPill(
-                                        label = "مراجعات اليوم: ${stats.reviewsToday}"
-                                    )
-                                    StatsHeroPill(
-                                        label = "الدقة: ${stats.overallAccuracyPercent}%"
-                                    )
-                                }
                             }
                         }
                     }
                 }
 
-                // 1. Learning & SRS Maturity Progress Card
+                // 3. Two KPI Cards matching Reference Screen 6 («إجمالي الكلمات» & «معدل النجاح»)
                 item {
-                    RoundedSectionCard(
-                        title = "تقدم الحفظ والمراجعة (SRS)",
-                        subtitle = "إجمالي الكلمات: ${stats.totalWords} • إجمالي المراجعات: ${stats.totalReviewsAllTime}",
-                        icon = Icons.Rounded.Analytics,
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Surface(
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(20.dp),
+                            color = MaterialTheme.colorScheme.surface,
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                            shadowElevation = 2.dp
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(14.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Star,
+                                    contentDescription = null,
+                                    tint = Color(0xFFF59E0B),
+                                    modifier = Modifier.size(28.dp)
+                                )
+                                Text(
+                                    text = "${stats.totalWords}",
+                                    style = MaterialTheme.typography.titleLarge,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    text = "إجمالي الكلمات",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+
+                        Surface(
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(20.dp),
+                            color = MaterialTheme.colorScheme.surface,
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                            shadowElevation = 2.dp
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(14.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.CheckCircle,
+                                    contentDescription = null,
+                                    tint = Color(0xFF16A34A),
+                                    modifier = Modifier.size(28.dp)
+                                )
+                                Text(
+                                    text = "${stats.overallAccuracyPercent}%",
+                                    style = MaterialTheme.typography.titleLarge,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    text = "معدل النجاح",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // 4. Mastery Progression Line Chart («تطور الإتقان») matching Reference Screen 6
+                item {
+                    ReferenceWhiteCard(
                         modifier = Modifier.padding(horizontal = 16.dp)
                     ) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            StatCountTile(
-                                label = "جديدة",
-                                count = stats.newWords,
-                                bg = MaterialTheme.colorScheme.secondaryContainer,
-                                fg = MaterialTheme.colorScheme.onSecondaryContainer,
-                                modifier = Modifier.weight(1f)
+                            Text(
+                                text = "تطور الإتقان",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurface
                             )
-                            StatCountTile(
-                                label = "تعلّم",
-                                count = stats.learningWords,
-                                bg = palette.srsHardBg,
-                                fg = palette.srsHardText,
-                                modifier = Modifier.weight(1f)
-                            )
-                            StatCountTile(
-                                label = "مراجعة",
-                                count = stats.reviewingWords,
-                                bg = palette.srsGoodBg,
-                                fg = palette.srsGoodText,
-                                modifier = Modifier.weight(1f)
-                            )
-                            StatCountTile(
-                                label = "متقنة",
-                                count = stats.masteredWords,
-                                bg = palette.successBg,
-                                fg = palette.successText,
-                                modifier = Modifier.weight(1f)
+                            Text(
+                                text = "السلسلة: ${stats.streakDays} يوم",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.primary,
+                                fontWeight = FontWeight.Bold
                             )
                         }
+                        WeeklyMasteryLineChart(points = uiState.dailyHistory)
+                    }
+                }
 
-                        if (stats.totalWords > 0) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(12.dp)
-                                    .clip(CircleShape)
-                                    .background(MaterialTheme.colorScheme.surfaceVariant)
+                // 5. «أصعب الكلمات» Horizontal Clickable Pills matching Reference Screen 6
+                item {
+                    ReferenceWhiteCard(
+                        modifier = Modifier.padding(horizontal = 16.dp)
+                    ) {
+                        Text(
+                            text = "أصعب الكلمات",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                        if (uiState.hardestWords.isEmpty()) {
+                            Text(
+                                text = "لا توجد كلمات صعبة أو أخطاء مسجلة حالياً.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        } else {
+                            LazyRow(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
-                                if (stats.masteredWords > 0) {
-                                    Box(
+                                items(uiState.hardestWords, key = { it.id }) { hardWord ->
+                                    Surface(
                                         modifier = Modifier
-                                            .fillMaxHeight()
-                                            .weight(stats.masteredWords.toFloat())
-                                            .background(palette.successBorder)
-                                    )
+                                            .clip(RoundedCornerShape(50))
+                                            .clickable { onOpenWordDetail(hardWord.id) },
+                                        shape = RoundedCornerShape(50),
+                                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
+                                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+                                    ) {
+                                        Text(
+                                            text = hardWord.displayTitle(),
+                                            style = MaterialTheme.typography.labelLarge,
+                                            fontWeight = FontWeight.SemiBold,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp)
+                                        )
+                                    }
                                 }
-                                if (stats.reviewingWords > 0) {
-                                    Box(
-                                        modifier = Modifier
-                                            .fillMaxHeight()
-                                            .weight(stats.reviewingWords.toFloat())
-                                            .background(MaterialTheme.colorScheme.primary)
-                                    )
-                                }
-                                if (stats.learningWords > 0) {
-                                    Box(
-                                        modifier = Modifier
-                                            .fillMaxHeight()
-                                            .weight(stats.learningWords.toFloat())
-                                            .background(palette.warningBorder)
-                                    )
-                                }
-                                if (stats.newWords > 0) {
-                                    Box(
-                                        modifier = Modifier
-                                            .fillMaxHeight()
-                                            .weight(stats.newWords.toFloat())
-                                            .background(MaterialTheme.colorScheme.secondary)
-                                    )
+                            }
+                        }
+                    }
+                }
+
+                // Tab-specific Detail Sections
+                when (activeTab) {
+                    StatsSegmentTab.GENERAL -> {
+                        // Missing Data Detector Card
+                        if (uiState.incompleteWordsCount > 0) {
+                            item {
+                                Surface(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 16.dp)
+                                        .clip(RoundedCornerShape(20.dp))
+                                        .clickable { onBrowseIncompleteWords() }
+                                        .testTag("incomplete_detector_card"),
+                                    shape = RoundedCornerShape(20.dp),
+                                    color = palette.warningBg,
+                                    border = BorderStroke(1.dp, palette.warningBorder)
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(14.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                    ) {
+                                        Icon(Icons.Rounded.WarningAmber, contentDescription = null, tint = palette.warningText)
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                text = "كلمات تحتاج استكمال بيانات (${uiState.incompleteWordsCount})",
+                                                style = MaterialTheme.typography.titleSmall,
+                                                color = palette.warningText,
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                            Text(
+                                                text = "اضغط لعرض الكلمات التي ينقصها معنى أو مثال أو مرادف.",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = palette.warningText
+                                            )
+                                        }
+                                    }
                                 }
                             }
                         }
 
-                        if (stats.dueToday > 0) {
-                            Button(
-                                onClick = onStartDueReview,
-                                shape = RoundedCornerShape(50),
-                                modifier = Modifier.fillMaxWidth()
+                        if (stats.bookDistribution.isNotEmpty()) {
+                            item {
+                                RoundedSectionCard(
+                                    title = "توزيع الكلمات حسب الكتاب",
+                                    icon = Icons.Rounded.MenuBook,
+                                    modifier = Modifier.padding(horizontal = 16.dp)
+                                ) {
+                                    val maxCount = stats.bookDistribution.maxOfOrNull { it.second }?.coerceAtLeast(1) ?: 1
+                                    stats.bookDistribution.take(6).forEach { (book, count) ->
+                                        DistributionBarRow(label = book, count = count, maxCount = maxCount)
+                                    }
+                                }
+                            }
+                        }
+
+                        if (stats.posDistribution.isNotEmpty()) {
+                            item {
+                                RoundedSectionCard(
+                                    title = "توزيع الكلمات حسب موقعها من الكلام",
+                                    icon = Icons.Rounded.Category,
+                                    modifier = Modifier.padding(horizontal = 16.dp)
+                                ) {
+                                    val maxCount = stats.posDistribution.maxOfOrNull { it.second }?.coerceAtLeast(1) ?: 1
+                                    stats.posDistribution.take(8).forEach { (pos, count) ->
+                                        DistributionBarRow(label = pos, count = count, maxCount = maxCount)
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    StatsSegmentTab.STUDY -> {
+                        item {
+                            RoundedSectionCard(
+                                title = "تقدم الحفظ والمراجعة (SRS)",
+                                subtitle = "معدل الإتقان الشامل: ${stats.masteryPercent}% • مراجعات اليوم: ${stats.reviewsToday}",
+                                icon = Icons.Rounded.Analytics,
+                                modifier = Modifier.padding(horizontal = 16.dp)
                             ) {
-                                Icon(Icons.Rounded.Psychology, contentDescription = null, modifier = Modifier.size(18.dp))
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text("ابدأ مراجعة ${stats.dueToday} كلمة مستحقة الآن")
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    StatCountTile("جديدة", stats.newWords, MaterialTheme.colorScheme.secondaryContainer, MaterialTheme.colorScheme.onSecondaryContainer, Modifier.weight(1f))
+                                    StatCountTile("تعلّم", stats.learningWords, palette.srsHardBg, palette.srsHardText, Modifier.weight(1f))
+                                    StatCountTile("مراجعة", stats.reviewingWords, palette.srsGoodBg, palette.srsGoodText, Modifier.weight(1f))
+                                    StatCountTile("متقنة", stats.masteredWords, palette.successBg, palette.successText, Modifier.weight(1f))
+                                }
+
+                                if (stats.totalWords > 0) {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .height(10.dp)
+                                            .clip(CircleShape)
+                                            .background(MaterialTheme.colorScheme.surfaceVariant)
+                                    ) {
+                                        if (stats.masteredWords > 0) Box(Modifier.fillMaxHeight().weight(stats.masteredWords.toFloat()).background(palette.successBorder))
+                                        if (stats.reviewingWords > 0) Box(Modifier.fillMaxHeight().weight(stats.reviewingWords.toFloat()).background(MaterialTheme.colorScheme.primary))
+                                        if (stats.learningWords > 0) Box(Modifier.fillMaxHeight().weight(stats.learningWords.toFloat()).background(palette.warningBorder))
+                                        if (stats.newWords > 0) Box(Modifier.fillMaxHeight().weight(stats.newWords.toFloat()).background(MaterialTheme.colorScheme.secondary))
+                                    }
+                                }
+
+                                if (stats.dueToday > 0) {
+                                    Button(
+                                        onClick = onStartDueReview,
+                                        shape = RoundedCornerShape(50),
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Icon(Icons.Rounded.Psychology, contentDescription = null, modifier = Modifier.size(18.dp))
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text("ابدأ مراجعة ${stats.dueToday} كلمة مستحقة الآن")
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    StatsSegmentTab.QUIZZES -> {
+                        item {
+                            RoundedSectionCard(
+                                title = "ملخص الاختبارات والميني-كويز",
+                                subtitle = "إجمالي المراجعات: ${stats.totalReviewsAllTime} • ميني-كويز اليوم: ${stats.miniQuizzesToday}",
+                                icon = Icons.Rounded.EmojiEvents,
+                                modifier = Modifier.padding(horizontal = 16.dp)
+                            ) {
+                                Text(
+                                    text = "نسبة النجاح التراكمية: ${stats.overallAccuracyPercent}%",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Button(
+                                    onClick = onStartHardQuiz,
+                                    enabled = uiState.hardOrMistakesCount > 0,
+                                    shape = RoundedCornerShape(50),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Text("اختبار الكلمات الصعبة (${uiState.hardOrMistakesCount})")
+                                }
                             }
                         }
                     }
                 }
 
-                // 2. Distribution by Book & Parts of Speech
-                if (stats.bookDistribution.isNotEmpty()) {
-                    item {
-                        RoundedSectionCard(
-                            title = "توزيع الكلمات حسب الكتاب",
-                            icon = Icons.Rounded.MenuBook,
-                            modifier = Modifier.padding(horizontal = 16.dp)
-                        ) {
-                            val maxCount = stats.bookDistribution.maxOfOrNull { it.second }?.coerceAtLeast(1) ?: 1
-                            stats.bookDistribution.take(6).forEach { (book, count) ->
-                                DistributionBarRow(label = book, count = count, maxCount = maxCount)
-                            }
-                        }
-                    }
-                }
-
-                if (stats.posDistribution.isNotEmpty()) {
-                    item {
-                        RoundedSectionCard(
-                            title = "توزيع الكلمات حسب موقعها من الكلام",
-                            icon = Icons.Rounded.Category,
-                            modifier = Modifier.padding(horizontal = 16.dp)
-                        ) {
-                            val maxCount = stats.posDistribution.maxOfOrNull { it.second }?.coerceAtLeast(1) ?: 1
-                            stats.posDistribution.take(8).forEach { (pos, count) ->
-                                DistributionBarRow(label = pos, count = count, maxCount = maxCount)
-                            }
-                        }
-                    }
-                }
-
-                // 3. Duplicate Detection & Cleaner Card
+                // Duplicate Cleaner Card
                 item {
                     RoundedSectionCard(
                         title = "اكتشاف ودمج الكلمات المكررة",
@@ -305,7 +495,7 @@ fun StatsScreen(
                     ) {
                         if (uiState.duplicateGroups.isEmpty()) {
                             Surface(
-                                shape = RoundedCornerShape(18.dp),
+                                shape = RoundedCornerShape(16.dp),
                                 color = palette.successBg,
                                 border = BorderStroke(1.dp, palette.successBorder)
                             ) {
@@ -329,7 +519,7 @@ fun StatsScreen(
                                 val lead = group.first()
                                 Surface(
                                     modifier = Modifier.fillMaxWidth(),
-                                    shape = RoundedCornerShape(18.dp),
+                                    shape = RoundedCornerShape(16.dp),
                                     color = palette.warningBg,
                                     border = BorderStroke(1.dp, palette.warningBorder)
                                 ) {
@@ -358,11 +548,7 @@ fun StatsScreen(
                                             onClick = { onMergeDuplicateGroup(group) },
                                             shape = RoundedCornerShape(50)
                                         ) {
-                                            Icon(
-                                                imageVector = Icons.Rounded.MergeType,
-                                                contentDescription = null,
-                                                modifier = Modifier.size(16.dp)
-                                            )
+                                            Icon(Icons.Rounded.MergeType, contentDescription = null, modifier = Modifier.size(16.dp))
                                             Spacer(modifier = Modifier.width(4.dp))
                                             Text("دمج")
                                         }
@@ -384,7 +570,7 @@ fun StatsScreen(
                     }
                 }
 
-                // 4. Offline Import, Export & JSON Backup / Restore Center
+                // Offline Export / Import / JSON Backup Card
                 item {
                     RoundedSectionCard(
                         title = "الاستيراد والتصدير والنسخ الاحتياطي",
@@ -410,12 +596,17 @@ fun StatsScreen(
                                     shape = RoundedCornerShape(50),
                                     colors = FilterChipDefaults.filterChipColors(
                                         selectedContainerColor = MaterialTheme.colorScheme.primary,
-                                        selectedLabelColor = MaterialTheme.colorScheme.onPrimary
+                                        selectedLabelColor = Color.White
                                     ),
                                     modifier = Modifier.testTag("import_policy_${policy.name.lowercase()}")
                                 )
                             }
                         }
+                        Text(
+                            text = selectedImportPolicy.descriptionAr,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
 
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -481,16 +672,55 @@ fun StatsScreen(
                             onClick = onOpenExportSheet,
                             enabled = !uiState.isExporting,
                             shape = RoundedCornerShape(50),
-                            modifier = Modifier.fillMaxWidth()
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("open_export_sheet_button")
                         ) {
                             Icon(Icons.Rounded.Download, contentDescription = null, modifier = Modifier.size(18.dp))
                             Spacer(modifier = Modifier.width(6.dp))
-                            Text("تصدير القاموس (PDF / Excel / Google Sheets CSV)")
+                            Text("تصدير القاموس (10 أوراق Excel / CSV / PDF)")
                         }
                     }
                 }
 
-                // 5. Theme Appearance Selector Card
+                // Form Customization & Bulk Quick Add
+                item {
+                    RoundedSectionCard(
+                        title = "تخصيص الحقول والإضافة السريعة",
+                        icon = Icons.Rounded.Tune,
+                        modifier = Modifier.padding(horizontal = 16.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            OutlinedButton(
+                                onClick = { showCustomizeSheet = true },
+                                shape = RoundedCornerShape(50),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("stats_customize_fields_button")
+                            ) {
+                                Icon(Icons.Rounded.Tune, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("تخصيص الحقول")
+                            }
+                            Button(
+                                onClick = { showBulkAddSheet = true },
+                                shape = RoundedCornerShape(50),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("stats_bulk_quick_add_button")
+                            ) {
+                                Icon(Icons.Rounded.Bolt, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("إضافة سريعة")
+                            }
+                        }
+                    }
+                }
+
+                // Light / Dark / System Theme Selector
                 item {
                     RoundedSectionCard(
                         title = "مظهر التطبيق",
@@ -511,7 +741,7 @@ fun StatsScreen(
                                     shape = RoundedCornerShape(50),
                                     colors = FilterChipDefaults.filterChipColors(
                                         selectedContainerColor = MaterialTheme.colorScheme.primary,
-                                        selectedLabelColor = MaterialTheme.colorScheme.onPrimary
+                                        selectedLabelColor = Color.White
                                     ),
                                     modifier = Modifier.testTag("theme_mode_${mode.name.lowercase()}")
                                 )
@@ -529,31 +759,22 @@ fun StatsScreen(
             onDismiss = { showRestoreDialog = false }
         )
     }
-}
 
-@Composable
-private fun StatsHeroPill(
-    label: String,
-    icon: androidx.compose.ui.graphics.vector.ImageVector? = null
-) {
-    Surface(
-        shape = RoundedCornerShape(50),
-        color = Color.White.copy(alpha = 0.20f)
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp)
-        ) {
-            if (icon != null) {
-                Icon(imageVector = icon, contentDescription = null, tint = Color.White, modifier = Modifier.size(15.dp))
-            }
-            Text(
-                text = label,
-                style = MaterialTheme.typography.labelLarge,
-                color = Color.White
-            )
-        }
+    if (showCustomizeSheet) {
+        FormCustomizationSheet(
+            config = formConfig,
+            onUpdateConfig = onUpdateFormConfig,
+            onDismiss = { showCustomizeSheet = false }
+        )
+    }
+
+    if (showBulkAddSheet) {
+        BulkQuickAddSheet(
+            availableBooks = uiState.availableBooks,
+            availableTags = uiState.availableStudyTags,
+            onSubmitBulk = onSubmitBulkQuickAdd,
+            onDismiss = { showBulkAddSheet = false }
+        )
     }
 }
 
@@ -567,25 +788,16 @@ private fun StatCountTile(
 ) {
     Surface(
         modifier = modifier,
-        shape = RoundedCornerShape(20.dp),
+        shape = RoundedCornerShape(18.dp),
         color = bg
     ) {
         Column(
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 12.dp),
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 10.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(2.dp)
         ) {
-            Text(
-                text = "$count",
-                style = MaterialTheme.typography.titleLarge,
-                color = fg,
-                fontWeight = FontWeight.Bold
-            )
-            Text(
-                text = label,
-                style = MaterialTheme.typography.labelSmall,
-                color = fg
-            )
+            Text(text = "$count", style = MaterialTheme.typography.titleLarge, color = fg, fontWeight = FontWeight.Bold)
+            Text(text = label, style = MaterialTheme.typography.labelSmall, color = fg)
         }
     }
 }
@@ -602,17 +814,8 @@ private fun DistributionBarRow(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            Text(
-                text = label,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurface
-            )
-            Text(
-                text = "$count كلمة",
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.primary,
-                fontWeight = FontWeight.Bold
-            )
+            Text(text = label, style = MaterialTheme.typography.bodyMedium)
+            Text(text = "$count كلمة", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
         }
         LinearProgressIndicator(
             progress = { ratio },

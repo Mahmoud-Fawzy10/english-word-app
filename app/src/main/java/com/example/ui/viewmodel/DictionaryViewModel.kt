@@ -6,6 +6,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.audio.OfflineTtsManager
 import com.example.data.local.AppPreferences
+import com.example.data.local.DailyHistoryPoint
 import com.example.data.local.DailyStudyStats
 import com.example.data.local.QamusiDatabase
 import com.example.data.local.ThemeMode
@@ -16,7 +17,14 @@ import com.example.data.model.DuplicatePolicy
 import com.example.data.model.SearchField
 import com.example.data.model.SortOption
 import com.example.data.model.WordEntry
+import com.example.data.model.WordFormConfig
+import com.example.data.model.WordRevision
+import com.example.data.repository.ImportSummary
+import com.example.data.repository.SaveWordResult
 import com.example.data.repository.WordRepository
+import com.example.domain.AchievementBadge
+import com.example.domain.DailyChallengeMission
+import com.example.domain.LearningAnalyticsEngine
 import com.example.domain.QuizAnswerRecord
 import com.example.domain.QuizConfig
 import com.example.domain.QuizDirection
@@ -24,14 +32,21 @@ import com.example.domain.QuizEngine
 import com.example.domain.QuizQuestionItem
 import com.example.domain.QuizQuestionType
 import com.example.domain.QuizScopeMode
+import com.example.domain.SentencePracticePrompt
 import com.example.domain.SrsGrade
 import com.example.domain.SrsMaturity
 import com.example.domain.SrsScheduler
+import com.example.domain.StudyGroupSummary
+import com.example.domain.StudyMapBookNode
+import com.example.domain.StudyMapBuilder
+import com.example.domain.UserRankInfo
 import com.example.export.DictionaryExporter
 import com.example.export.DictionaryImporter
 import com.example.export.ExportFormat
 import com.example.export.JsonBackupManager
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -44,6 +59,8 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 data class LearningStatistics(
     val totalWords: Int = 0,
@@ -51,26 +68,45 @@ data class LearningStatistics(
     val learningWords: Int = 0,
     val reviewingWords: Int = 0,
     val masteredWords: Int = 0,
+    val masteryPercent: Int = 0,
     val dueToday: Int = 0,
+    val hardOrMistakesCount: Int = 0,
+    val incompleteWordsCount: Int = 0,
     val totalReviewsAllTime: Int = 0,
     val overallAccuracyPercent: Int = 0,
     val reviewsToday: Int = 0,
+    val miniQuizzesToday: Int = 0,
     val streakDays: Int = 0,
+    val dailyGoalTarget: Int = 15,
     val bookDistribution: List<Pair<String, Int>> = emptyList(),
     val posDistribution: List<Pair<String, Int>> = emptyList()
 )
+
+data class AudioPlaylistState(
+    val isActive: Boolean = false,
+    val isPaused: Boolean = false,
+    val currentIndex: Int = 0,
+    val queue: List<WordEntry> = emptyList(),
+    val repeatWordTwice: Boolean = false
+) {
+    val currentWord: WordEntry? get() = queue.getOrNull(currentIndex)
+}
 
 data class DictionaryUiState(
     val allWordsCount: Int = 0,
     val favoriteCount: Int = 0,
     val dueReviewCount: Int = 0,
     val masteredCount: Int = 0,
+    val masteryPercent: Int = 0,
+    val hardOrMistakesCount: Int = 0,
+    val incompleteWordsCount: Int = 0,
     val allWords: List<WordEntry> = emptyList(),
     val filteredWords: List<WordEntry> = emptyList(),
     val duplicateGroups: List<List<WordEntry>> = emptyList(),
     val stats: LearningStatistics = LearningStatistics(),
     val availableBooks: List<String> = CurriculumDefaults.DEFAULT_BOOKS,
     val availablePartsOfSpeech: List<String> = CurriculumDefaults.DEFAULT_PARTS_OF_SPEECH,
+    val availableStudyTags: List<String> = CurriculumDefaults.DEFAULT_STUDY_TAGS,
     val availableUnits: List<String> = emptyList(),
     val availableLessons: List<String> = emptyList(),
     val searchQuery: String = "",
@@ -79,13 +115,31 @@ data class DictionaryUiState(
     val browseGroupMode: BrowseGroupMode = BrowseGroupMode.FLAT_LIST,
     val advancedFilter: AdvancedSearchFilter = AdvancedSearchFilter(),
     val sortOption: SortOption = SortOption.NEWEST,
-    val isExporting: Boolean = false
+    val isExporting: Boolean = false,
+    val wordOfTheDay: WordEntry? = null,
+    val curriculumMap: List<StudyMapBookNode> = emptyList(),
+    val studyGroups: List<StudyGroupSummary> = emptyList(),
+    val dailyChallenges: List<DailyChallengeMission> = emptyList(),
+    val achievements: List<AchievementBadge> = emptyList(),
+    val userRank: UserRankInfo = UserRankInfo("بداية القاموس", 10, 0),
+    val dailyHistory: List<DailyHistoryPoint> = emptyList(),
+    val hardestWords: List<WordEntry> = emptyList(),
+    val sentencePrompts: List<SentencePracticePrompt> = emptyList(),
+    val recentSearches: List<String> = emptyList(),
+    val formConfig: WordFormConfig = WordFormConfig(),
+    val dailyGoalTarget: Int = 15,
+    val ttsSpeechRate: Float = 0.92f,
+    val selectedWordIds: Set<Long> = emptySet(),
+    val exactSearchMatch: WordEntry? = null
 ) {
     val isSearchOrFilterActive: Boolean
         get() = searchQuery.isNotBlank() || quickBookFilter != null || advancedFilter.isActive
 
     val hasNoSearchResults: Boolean
         get() = allWordsCount > 0 && filteredWords.isEmpty() && isSearchOrFilterActive
+
+    val isSelectionMode: Boolean
+        get() = selectedWordIds.isNotEmpty()
 }
 
 data class QuizSessionState(
@@ -96,6 +150,9 @@ data class QuizSessionState(
     val selectedMcqOption: String? = null,
     val typedInput: String = "",
     val lastTypingCorrect: Boolean? = null,
+    val scrambleAnswer: String = "",
+    val lastScrambleCorrect: Boolean? = null,
+    val matchRoundCompleted: Boolean = false,
     val records: List<QuizAnswerRecord> = emptyList(),
     val requeuedWordIds: Set<Long> = emptySet(),
     val isFinished: Boolean = false
@@ -109,6 +166,25 @@ sealed class UiEvent {
     data class LaunchShareIntent(val uri: Uri, val format: ExportFormat) : UiEvent()
 }
 
+private data class FilterInputs(
+    val query: String,
+    val field: SearchField,
+    val quickBook: String?,
+    val groupMode: BrowseGroupMode,
+    val advFilter: AdvancedSearchFilter,
+    val sort: SortOption
+)
+
+private data class StudyPrefsSnapshot(
+    val daily: DailyStudyStats,
+    val now: Long,
+    val formConfig: WordFormConfig,
+    val recentSearches: List<String>,
+    val ttsRate: Float,
+    val selectedIds: Set<Long>,
+    val isBusy: Boolean
+)
+
 class DictionaryViewModel(application: Application) : AndroidViewModel(application) {
 
     private val repository: WordRepository
@@ -117,7 +193,8 @@ class DictionaryViewModel(application: Application) : AndroidViewModel(applicati
 
     init {
         val db = QamusiDatabase.getInstance(application)
-        repository = WordRepository(db.wordDao())
+        repository = WordRepository(db.wordDao(), db.wordRevisionDao())
+        ttsManager.setSpeechRate(preferences.getTtsSpeechRate())
     }
 
     private val _themeMode = MutableStateFlow(preferences.getThemeMode())
@@ -125,6 +202,10 @@ class DictionaryViewModel(application: Application) : AndroidViewModel(applicati
 
     private val _dailyStats = MutableStateFlow(preferences.getDailyStudyStats())
     private val _timeRefreshTick = MutableStateFlow(System.currentTimeMillis())
+    private val _formConfig = MutableStateFlow(preferences.getFormConfig())
+    private val _recentSearches = MutableStateFlow(preferences.getRecentSearches())
+    private val _ttsSpeechRate = MutableStateFlow(preferences.getTtsSpeechRate())
+    private val _selectedWordIds = MutableStateFlow<Set<Long>>(emptySet())
 
     private val _searchQuery = MutableStateFlow("")
     private val _searchField = MutableStateFlow(SearchField.ALL)
@@ -140,32 +221,58 @@ class DictionaryViewModel(application: Application) : AndroidViewModel(applicati
     private val _quizSession = MutableStateFlow<QuizSessionState?>(null)
     val quizSession: StateFlow<QuizSessionState?> = _quizSession.asStateFlow()
 
+    private val _audioPlaylist = MutableStateFlow(AudioPlaylistState())
+    val audioPlaylist: StateFlow<AudioPlaylistState> = _audioPlaylist.asStateFlow()
+    private var audioPlaylistJob: Job? = null
+
     private val _events = MutableSharedFlow<UiEvent>()
     val events: SharedFlow<UiEvent> = _events.asSharedFlow()
 
-    val uiState: StateFlow<DictionaryUiState> = combine(
-        repository.allWords,
+    private val filterInputsFlow = combine(
         _searchQuery,
         _searchField,
         _quickBookFilter,
         _browseGroupMode,
-        _advancedFilter,
-        _sortOption,
-        _isBusy,
+        _advancedFilter
+    ) { q, f, qb, gm, adv ->
+        FilterInputs(q, f, qb, gm, adv, SortOption.NEWEST)
+    }.combine(_sortOption) { base, sort ->
+        base.copy(sort = sort)
+    }
+
+    private val studyPrefsFlow = combine(
         _dailyStats,
-        _timeRefreshTick
-    ) { values ->
-        @Suppress("UNCHECKED_CAST")
-        val allWords = values[0] as List<WordEntry>
-        val query = values[1] as String
-        val field = values[2] as SearchField
-        val quickBook = values[3] as String?
-        val groupMode = values[4] as BrowseGroupMode
-        val advFilter = values[5] as AdvancedSearchFilter
-        val sort = values[6] as SortOption
-        val busy = values[7] as Boolean
-        val daily = values[8] as DailyStudyStats
-        val now = values[9] as Long
+        _timeRefreshTick,
+        _formConfig,
+        _recentSearches,
+        _ttsSpeechRate
+    ) { daily, now, fc, recents, rate ->
+        StudyPrefsSnapshot(
+            daily = daily,
+            now = now,
+            formConfig = fc,
+            recentSearches = recents,
+            ttsRate = rate,
+            selectedIds = emptySet(),
+            isBusy = false
+        )
+    }.combine(_selectedWordIds) { snap, sel ->
+        snap.copy(selectedIds = sel)
+    }.combine(_isBusy) { snap, busy ->
+        snap.copy(isBusy = busy)
+    }
+
+    val uiState: StateFlow<DictionaryUiState> = combine(
+        repository.allWords,
+        filterInputsFlow,
+        studyPrefsFlow
+    ) { allWords, filters, prefs ->
+        val query = filters.query
+        val field = filters.field
+        val quickBook = filters.quickBook
+        val groupMode = filters.groupMode
+        val advFilter = filters.advFilter
+        val sort = filters.sort
 
         val dynamicBooks = (CurriculumDefaults.DEFAULT_BOOKS +
             allWords.flatMap { it.books } +
@@ -176,6 +283,12 @@ class DictionaryViewModel(application: Application) : AndroidViewModel(applicati
 
         val dynamicPos = (CurriculumDefaults.DEFAULT_PARTS_OF_SPEECH +
             allWords.flatMap { it.partsOfSpeech })
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
+            .distinct()
+
+        val dynamicTags = (CurriculumDefaults.DEFAULT_STUDY_TAGS +
+            allWords.flatMap { it.studyTags })
             .map { it.trim() }
             .filter { it.isNotBlank() }
             .distinct()
@@ -204,20 +317,49 @@ class DictionaryViewModel(application: Application) : AndroidViewModel(applicati
             applySorting(filtered, sort)
         }
 
-        val stats = buildLearningStats(allWords, daily, now)
+        val normQ = normalize(query)
+        val exactMatch = if (normQ.isNotEmpty()) {
+            allWords.firstOrNull {
+                normalize(it.word) == normQ || normalize(it.arabicMeaning) == normQ
+            }
+        } else {
+            null
+        }
+
+        val stats = buildLearningStats(allWords, prefs.daily, prefs.now)
         val duplicateGroups = repository.findDuplicateGroups(allWords)
+        val validSelection = prefs.selectedIds.intersect(allWords.map { it.id }.toSet())
+        val achievements = LearningAnalyticsEngine.buildAchievements(
+            words = allWords,
+            totalReviewsAllTime = stats.totalReviewsAllTime,
+            overallAccuracyPercent = stats.overallAccuracyPercent,
+            streakDays = stats.streakDays,
+            miniQuizzesToday = stats.miniQuizzesToday,
+            duplicateGroupsCount = duplicateGroups.size
+        )
+        val userRank = LearningAnalyticsEngine.computeRank(allWords.size)
+        val dailyHistory = preferences.getLast7DaysHistory(stats.masteryPercent, prefs.now)
+        val hardestWords = allWords
+            .filter { it.isHardOrMistake() }
+            .sortedWith(compareByDescending<WordEntry> { it.difficulty }.thenByDescending { it.lastWrongAt })
+            .take(8)
+        val sentencePrompts = LearningAnalyticsEngine.buildSentencePrompts(allWords, limit = 6)
 
         DictionaryUiState(
             allWordsCount = allWords.size,
             favoriteCount = allWords.count { it.isFavorite },
             dueReviewCount = stats.dueToday,
             masteredCount = stats.masteredWords,
+            masteryPercent = stats.masteryPercent,
+            hardOrMistakesCount = stats.hardOrMistakesCount,
+            incompleteWordsCount = stats.incompleteWordsCount,
             allWords = allWords,
             filteredWords = sorted,
             duplicateGroups = duplicateGroups,
             stats = stats,
             availableBooks = dynamicBooks,
             availablePartsOfSpeech = dynamicPos,
+            availableStudyTags = dynamicTags,
             availableUnits = dynamicUnits,
             availableLessons = dynamicLessons,
             searchQuery = query,
@@ -226,7 +368,22 @@ class DictionaryViewModel(application: Application) : AndroidViewModel(applicati
             browseGroupMode = groupMode,
             advancedFilter = advFilter,
             sortOption = sort,
-            isExporting = busy
+            isExporting = prefs.isBusy,
+            wordOfTheDay = StudyMapBuilder.pickWordOfTheDay(allWords, prefs.now),
+            curriculumMap = StudyMapBuilder.buildCurriculumMap(allWords, prefs.now),
+            studyGroups = StudyMapBuilder.buildStudyGroups(allWords, prefs.now),
+            dailyChallenges = StudyMapBuilder.buildDailyChallenges(allWords, prefs.daily, prefs.now),
+            achievements = achievements,
+            userRank = userRank,
+            dailyHistory = dailyHistory,
+            hardestWords = hardestWords,
+            sentencePrompts = sentencePrompts,
+            recentSearches = prefs.recentSearches,
+            formConfig = prefs.formConfig,
+            dailyGoalTarget = prefs.daily.dailyGoalTarget,
+            ttsSpeechRate = prefs.ttsRate,
+            selectedWordIds = validSelection,
+            exactSearchMatch = exactMatch
         )
     }.stateIn(
         scope = viewModelScope,
@@ -235,6 +392,7 @@ class DictionaryViewModel(application: Application) : AndroidViewModel(applicati
     )
 
     override fun onCleared() {
+        stopAudioPlaylist()
         ttsManager.shutdown()
         super.onCleared()
     }
@@ -258,6 +416,23 @@ class DictionaryViewModel(application: Application) : AndroidViewModel(applicati
         setThemeMode(next)
     }
 
+    fun setDailyGoalTarget(target: Int) {
+        preferences.setDailyGoalTarget(target)
+        _dailyStats.value = preferences.getDailyStudyStats()
+    }
+
+    fun updateFormConfig(config: WordFormConfig) {
+        preferences.setFormConfig(config)
+        _formConfig.value = config
+    }
+
+    fun setTtsSpeechRate(rate: Float) {
+        val clamped = rate.coerceIn(0.6f, 1.4f)
+        preferences.setTtsSpeechRate(clamped)
+        _ttsSpeechRate.value = clamped
+        ttsManager.setSpeechRate(clamped)
+    }
+
     fun speakWordOffline(text: String) {
         if (text.isBlank()) return
         val ok = ttsManager.speakOffline(text)
@@ -270,7 +445,134 @@ class DictionaryViewModel(application: Application) : AndroidViewModel(applicati
         }
     }
 
+    // -------------------------------------------------------------------------
+    // Hands-Free Offline Audio Study Playlist
+    // -------------------------------------------------------------------------
+    fun startAudioPlaylist(words: List<WordEntry>, repeatWordTwice: Boolean = false) {
+        val speakable = words.filter { it.word.isNotBlank() }
+        if (speakable.isEmpty()) {
+            viewModelScope.launch {
+                _events.emit(UiEvent.ShowMessage("لا توجد كلمات إنجليزية قابلة للنطق في القائمة الحالية"))
+            }
+            return
+        }
+        if (!ttsManager.isAvailable()) {
+            viewModelScope.launch {
+                _events.emit(UiEvent.ShowMessage("محرك النطق المحلي (TTS) غير متاح على هذا الجهاز"))
+            }
+            return
+        }
+        audioPlaylistJob?.cancel()
+        _audioPlaylist.value = AudioPlaylistState(
+            isActive = true,
+            isPaused = false,
+            currentIndex = 0,
+            queue = speakable,
+            repeatWordTwice = repeatWordTwice
+        )
+        launchPlaylistLoop()
+    }
+
+    fun togglePauseAudioPlaylist() {
+        val cur = _audioPlaylist.value
+        if (!cur.isActive) return
+        if (cur.isPaused) {
+            _audioPlaylist.value = cur.copy(isPaused = false)
+            launchPlaylistLoop()
+        } else {
+            audioPlaylistJob?.cancel()
+            ttsManager.stop()
+            _audioPlaylist.value = cur.copy(isPaused = true)
+        }
+    }
+
+    fun setAudioRepeatTwice(repeatTwice: Boolean) {
+        _audioPlaylist.value = _audioPlaylist.value.copy(repeatWordTwice = repeatTwice)
+    }
+
+    fun skipAudioPlaylist(delta: Int) {
+        val cur = _audioPlaylist.value
+        if (!cur.isActive || cur.queue.isEmpty()) return
+        val nextIdx = (cur.currentIndex + delta).coerceIn(0, cur.queue.lastIndex)
+        audioPlaylistJob?.cancel()
+        ttsManager.stop()
+        _audioPlaylist.value = cur.copy(currentIndex = nextIdx, isPaused = false)
+        launchPlaylistLoop()
+    }
+
+    fun stopAudioPlaylist() {
+        audioPlaylistJob?.cancel()
+        ttsManager.setUtteranceListener(null)
+        ttsManager.stop()
+        _audioPlaylist.value = AudioPlaylistState()
+    }
+
+    private fun launchPlaylistLoop() {
+        audioPlaylistJob?.cancel()
+        audioPlaylistJob = viewModelScope.launch(Dispatchers.IO) {
+            while (true) {
+                val state = _audioPlaylist.value
+                if (!state.isActive || state.isPaused || state.currentIndex >= state.queue.size) {
+                    if (state.isActive && !state.isPaused && state.currentIndex >= state.queue.size) {
+                        _audioPlaylist.value = AudioPlaylistState()
+                    }
+                    break
+                }
+                val entry = state.queue[state.currentIndex]
+                speakAndAwait(entry.word)
+                delay(650)
+                if (_audioPlaylist.value.repeatWordTwice && _audioPlaylist.value.isActive && !_audioPlaylist.value.isPaused) {
+                    speakAndAwait(entry.word)
+                    delay(750)
+                }
+                val syn = entry.synonyms.firstOrNull()
+                if (!syn.isNullOrBlank() && _audioPlaylist.value.isActive && !_audioPlaylist.value.isPaused) {
+                    speakAndAwait(syn)
+                    delay(650)
+                }
+                delay(900)
+                val latest = _audioPlaylist.value
+                if (!latest.isActive || latest.isPaused) break
+                val nextIdx = latest.currentIndex + 1
+                if (nextIdx >= latest.queue.size) {
+                    _audioPlaylist.value = AudioPlaylistState()
+                    break
+                } else {
+                    _audioPlaylist.value = latest.copy(currentIndex = nextIdx)
+                }
+            }
+        }
+    }
+
+    private fun speakAndAwait(text: String) {
+        val uid = "playlist_${System.nanoTime()}"
+        val latch = CountDownLatch(1)
+        ttsManager.setUtteranceListener { finishedId ->
+            if (finishedId == uid) latch.countDown()
+        }
+        val started = ttsManager.speakOffline(text, uid)
+        if (started) {
+            runCatching { latch.await(6, TimeUnit.SECONDS) }
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Dictionary Queries, Multi-Select Batch & Anti-Duplicate Persistence
+    // -------------------------------------------------------------------------
     fun observeWord(id: Long): Flow<WordEntry?> = repository.observeWordById(id)
+
+    fun observeRevisions(wordId: Long): Flow<List<WordRevision>> = repository.observeRevisions(wordId)
+
+    fun restoreWordRevision(revisionId: Long) {
+        viewModelScope.launch {
+            val restored = withContext(Dispatchers.IO) {
+                repository.restoreRevision(revisionId)
+            }
+            if (restored != null) {
+                _events.emit(UiEvent.ShowMessage("تمت استعادة النسخة السابقة من «${restored.displayTitle()}»"))
+            }
+        }
+    }
 
     suspend fun getWordOnce(id: Long): WordEntry? = repository.getWordOnce(id)
 
@@ -280,8 +582,20 @@ class DictionaryViewModel(application: Application) : AndroidViewModel(applicati
         }
     }
 
+    fun findRelatedWords(target: WordEntry): List<WordEntry> {
+        return repository.findRelatedWords(target, uiState.value.allWords)
+    }
+
     fun updateSearchQuery(query: String) {
         _searchQuery.value = query
+    }
+
+    fun commitSearchHistory(query: String) {
+        _recentSearches.value = preferences.addRecentSearch(query)
+    }
+
+    fun clearSearchHistory() {
+        _recentSearches.value = preferences.clearRecentSearches()
     }
 
     fun updateSearchField(field: SearchField) {
@@ -300,6 +614,40 @@ class DictionaryViewModel(application: Application) : AndroidViewModel(applicati
         _advancedFilter.value = filter
     }
 
+    fun toggleFavoritesFilter() {
+        val cur = _advancedFilter.value
+        _advancedFilter.value = cur.copy(favoritesOnly = !cur.favoritesOnly)
+    }
+
+    fun toggleHardMistakesFilter() {
+        val cur = _advancedFilter.value
+        _advancedFilter.value = cur.copy(hardOrMistakesOnly = !cur.hardOrMistakesOnly)
+    }
+
+    fun toggleIncompleteFilter() {
+        val cur = _advancedFilter.value
+        _advancedFilter.value = cur.copy(incompleteOnly = !cur.incompleteOnly)
+    }
+
+    fun applyIncompleteOnlyFilter() {
+        _searchQuery.value = ""
+        _quickBookFilter.value = null
+        _advancedFilter.value = AdvancedSearchFilter(incompleteOnly = true)
+    }
+
+    fun applyQuickTagFilter(tag: String) {
+        _advancedFilter.value = _advancedFilter.value.copy(selectedStudyTags = setOf(tag))
+    }
+
+    fun applyUnitFilter(book: String, unit: String) {
+        _searchQuery.value = ""
+        _quickBookFilter.value = null
+        _advancedFilter.value = AdvancedSearchFilter(
+            selectedBooks = if (book == "كلمات عامة") emptySet() else setOf(book),
+            unitQuery = if (unit == "بدون وحدة") "" else unit
+        )
+    }
+
     fun clearAllFilters() {
         _searchQuery.value = ""
         _quickBookFilter.value = null
@@ -310,24 +658,132 @@ class DictionaryViewModel(application: Application) : AndroidViewModel(applicati
         _sortOption.value = option
     }
 
+    fun toggleWordSelection(wordId: Long) {
+        val next = _selectedWordIds.value.toMutableSet()
+        if (!next.add(wordId)) next.remove(wordId)
+        _selectedWordIds.value = next
+    }
+
+    fun clearWordSelection() {
+        _selectedWordIds.value = emptySet()
+    }
+
+    fun selectAllFilteredWords() {
+        _selectedWordIds.value = uiState.value.filteredWords.map { it.id }.toSet()
+    }
+
+    fun batchSetFavorite(isFavorite: Boolean) {
+        val ids = _selectedWordIds.value.toList()
+        if (ids.isEmpty()) return
+        viewModelScope.launch {
+            repository.setFavoriteBatch(ids, isFavorite)
+            _selectedWordIds.value = emptySet()
+            _events.emit(
+                UiEvent.ShowMessage(
+                    if (isFavorite) "تمت إضافة ${ids.size} كلمة للمفضلة" else "تمت إزالة ${ids.size} كلمة من المفضلة"
+                )
+            )
+        }
+    }
+
+    fun batchSetDifficulty(difficulty: Int) {
+        val ids = _selectedWordIds.value.toList()
+        if (ids.isEmpty()) return
+        viewModelScope.launch {
+            repository.setDifficultyBatch(ids, difficulty)
+            _selectedWordIds.value = emptySet()
+            _events.emit(UiEvent.ShowMessage("تم تحديث مستوى الصعوبة لـ ${ids.size} كلمة"))
+        }
+    }
+
+    fun batchAddStudyTag(tag: String) {
+        val ids = _selectedWordIds.value.toList()
+        if (ids.isEmpty() || tag.isBlank()) return
+        viewModelScope.launch {
+            repository.addStudyTagBatch(ids, tag)
+            _selectedWordIds.value = emptySet()
+            _events.emit(UiEvent.ShowMessage("تمت إضافة ${ids.size} كلمة إلى مجموعة «$tag»"))
+        }
+    }
+
+    fun batchDeleteSelected() {
+        val ids = _selectedWordIds.value.toList()
+        if (ids.isEmpty()) return
+        viewModelScope.launch {
+            repository.deleteWordsBatch(ids)
+            _selectedWordIds.value = emptySet()
+            _events.emit(UiEvent.ShowMessage("تم حذف ${ids.size} كلمة من قاموسك"))
+        }
+    }
+
+    fun startQuizWithSelectedWords(): Boolean {
+        val ids = _selectedWordIds.value
+        val words = uiState.value.allWords.filter { ids.contains(it.id) }
+        if (words.isEmpty()) return false
+        _selectedWordIds.value = emptySet()
+        val cfg = QuizConfig(
+            scopeMode = QuizScopeMode.RANDOM_RANGE,
+            questionType = QuizQuestionType.FLASHCARD_SRS,
+            questionLimit = words.size
+        )
+        val questions = QuizEngine.buildQuizQuestions(words, uiState.value.allWords, cfg)
+        _quizSession.value = QuizSessionState(config = cfg, questions = questions)
+        return questions.isNotEmpty()
+    }
+
     fun saveWord(
         entry: WordEntry,
         mergeTarget: WordEntry? = null,
-        onSaved: (Long) -> Unit = {}
+        onSaved: (Long) -> Unit = {},
+        onDuplicateRejected: (WordEntry) -> Unit = {}
     ) {
         viewModelScope.launch {
             val cleaned = cleanEntry(entry)
-            val savedId = if (mergeTarget != null) {
-                repository.mergeEntries(mergeTarget, cleaned).id
-            } else {
-                repository.saveWord(cleaned)
+            when (val res = repository.saveWordChecked(cleaned, mergeTarget)) {
+                is SaveWordResult.Saved -> {
+                    _events.emit(UiEvent.ShowMessage("تم حفظ الكلمة في قاموسك"))
+                    onSaved(res.id)
+                }
+                is SaveWordResult.Merged -> {
+                    _events.emit(UiEvent.ShowMessage("تم دمج البيانات مع الكلمة الموجودة بدون تكرار"))
+                    onSaved(res.id)
+                }
+                is SaveWordResult.DuplicateRejected -> {
+                    _events.emit(
+                        UiEvent.ShowMessage(
+                            "مرفوض التكرار: «${res.existing.displayTitle()}» موجودة بالفعل في قاموسك"
+                        )
+                    )
+                    onDuplicateRejected(res.existing)
+                }
+                SaveWordResult.EmptyRejected -> {
+                    _events.emit(UiEvent.ShowMessage("أدخل الكلمة أو المعنى أو أي معلومة واحدة على الأقل"))
+                }
+            }
+        }
+    }
+
+    fun bulkQuickAdd(
+        rawText: String,
+        defaultBook: String?,
+        defaultTag: String?,
+        onDone: (ImportSummary) -> Unit = {}
+    ) {
+        viewModelScope.launch {
+            val parsed = StudyMapBuilder.parseBulkQuickLines(rawText, defaultBook, defaultTag)
+            if (parsed.isEmpty()) {
+                _events.emit(UiEvent.ShowMessage("لم يتم التعرف على كلمات صالحة في النص المدخل"))
+                return@launch
+            }
+            val summary = withContext(Dispatchers.IO) {
+                repository.importWords(parsed, DuplicatePolicy.SKIP)
             }
             _events.emit(
                 UiEvent.ShowMessage(
-                    if (mergeTarget != null) "تم دمج البيانات مع الكلمة الموجودة" else "تم حفظ الكلمة في قاموسك"
+                    "الإضافة السريعة: أُضيف ${summary.insertedCount} • رُفض التكرار ${summary.skippedCount}"
                 )
             )
-            onSaved(savedId)
+            onDone(summary)
         }
     }
 
@@ -362,7 +818,7 @@ class DictionaryViewModel(application: Application) : AndroidViewModel(applicati
     }
 
     // -------------------------------------------------------------------------
-    // Spaced Repetition (SRS) & Quiz Session Actions
+    // Spaced Repetition (SRS) & Quiz / Mini-Quiz Session Actions
     // -------------------------------------------------------------------------
     fun updateQuizConfig(transform: (QuizConfig) -> QuizConfig) {
         _quizConfig.value = transform(_quizConfig.value)
@@ -379,8 +835,11 @@ class DictionaryViewModel(application: Application) : AndroidViewModel(applicati
                 val msg = when (activeConfig.questionType) {
                     QuizQuestionType.SYNONYMS -> "لا توجد كلمات تحتوي على مرادفات ضمن هذا النطاق"
                     QuizQuestionType.ANTONYMS -> "لا توجد كلمات تحتوي على مضادات ضمن هذا النطاق"
-                    QuizQuestionType.MULTIPLE_CHOICE, QuizQuestionType.TYPING ->
-                        "لا توجد كلمات تحتوي على الكلمة والمعنى معاً ضمن هذا النطاق"
+                    QuizQuestionType.PREPOSITIONS_COLLOCATIONS -> "لا توجد كلمات تحتوي على حروف جر أو متلازمات ضمن هذا النطاق"
+                    QuizQuestionType.LETTER_SCRAMBLE -> "لا توجد كلمات من 3 حروف فأكثر ضمن هذا النطاق"
+                    QuizQuestionType.MULTIPLE_CHOICE,
+                    QuizQuestionType.TYPING,
+                    QuizQuestionType.MATCH_PAIRS -> "لا توجد كلمات تحتوي على الكلمة والمعنى معاً ضمن هذا النطاق"
                     else -> "لا توجد كلمات مطابقة للنطاق المحدد حالياً"
                 }
                 _events.emit(UiEvent.ShowMessage(msg))
@@ -435,16 +894,8 @@ class DictionaryViewModel(application: Application) : AndroidViewModel(applicati
             !session.requeuedWordIds.contains(question.entry.id) &&
             session.questions.size > 1
 
-        val updatedQuestions = if (shouldRequeue) {
-            session.questions + question
-        } else {
-            session.questions
-        }
-        val updatedRequeued = if (shouldRequeue) {
-            session.requeuedWordIds + question.entry.id
-        } else {
-            session.requeuedWordIds
-        }
+        val updatedQuestions = if (shouldRequeue) session.questions + question else session.questions
+        val updatedRequeued = if (shouldRequeue) session.requeuedWordIds + question.entry.id else session.requeuedWordIds
 
         advanceWithRecord(
             session = session.copy(questions = updatedQuestions, requeuedWordIds = updatedRequeued),
@@ -510,6 +961,62 @@ class DictionaryViewModel(application: Application) : AndroidViewModel(applicati
         )
     }
 
+    fun submitScrambleAnswer(answer: String) {
+        val session = _quizSession.value ?: return
+        if (session.lastScrambleCorrect != null) return
+        val question = session.currentQuestion ?: return
+        val isCorrect = normalize(answer) == normalize(question.answerText)
+        val grade = if (isCorrect) SrsGrade.GOOD else SrsGrade.AGAIN
+        val isLast = session.currentIndex + 1 >= session.questions.size
+        viewModelScope.launch {
+            repository.recordSrsReview(question.entry, grade)
+            _dailyStats.value = preferences.recordReviewActivity(incrementMiniQuiz = isLast)
+            _timeRefreshTick.value = System.currentTimeMillis()
+        }
+        val record = QuizAnswerRecord(
+            entry = question.entry,
+            isCorrect = isCorrect,
+            grade = grade,
+            userAnswer = answer
+        )
+        _quizSession.value = session.copy(
+            scrambleAnswer = answer,
+            lastScrambleCorrect = isCorrect,
+            isAnswerRevealed = true,
+            records = session.records + record
+        )
+    }
+
+    fun completeMatchPairsRound(mistakenEntryIds: Set<Long>) {
+        val session = _quizSession.value ?: return
+        if (session.matchRoundCompleted) return
+        val question = session.currentQuestion ?: return
+        val pairs = question.matchPairs
+        if (pairs.isEmpty()) return
+        val isLast = session.currentIndex + 1 >= session.questions.size
+
+        val roundRecords = pairs.map { pair ->
+            val ok = !mistakenEntryIds.contains(pair.entry.id)
+            QuizAnswerRecord(
+                entry = pair.entry,
+                isCorrect = ok,
+                grade = if (ok) SrsGrade.GOOD else SrsGrade.AGAIN
+            )
+        }
+        viewModelScope.launch {
+            roundRecords.forEach { rec ->
+                repository.recordSrsReview(rec.entry, rec.grade)
+            }
+            _dailyStats.value = preferences.recordReviewActivity(incrementMiniQuiz = isLast)
+            _timeRefreshTick.value = System.currentTimeMillis()
+        }
+        _quizSession.value = session.copy(
+            matchRoundCompleted = true,
+            isAnswerRevealed = true,
+            records = session.records + roundRecords
+        )
+    }
+
     fun nextQuizQuestion() {
         val session = _quizSession.value ?: return
         val nextIndex = session.currentIndex + 1
@@ -521,7 +1028,10 @@ class DictionaryViewModel(application: Application) : AndroidViewModel(applicati
                 isAnswerRevealed = false,
                 selectedMcqOption = null,
                 typedInput = "",
-                lastTypingCorrect = null
+                lastTypingCorrect = null,
+                scrambleAnswer = "",
+                lastScrambleCorrect = null,
+                matchRoundCompleted = false
             )
         }
     }
@@ -541,6 +1051,9 @@ class DictionaryViewModel(application: Application) : AndroidViewModel(applicati
                 selectedMcqOption = null,
                 typedInput = "",
                 lastTypingCorrect = null,
+                scrambleAnswer = "",
+                lastScrambleCorrect = null,
+                matchRoundCompleted = false,
                 records = updatedRecords
             )
         }
@@ -582,9 +1095,9 @@ class DictionaryViewModel(application: Application) : AndroidViewModel(applicati
     // -------------------------------------------------------------------------
     // Offline Export, Import (CSV/XLSX) & JSON Backup/Restore
     // -------------------------------------------------------------------------
-    fun exportAndShare(format: ExportFormat, onlyFiltered: Boolean) {
+    fun exportAndShare(format: ExportFormat, onlyFiltered: Boolean, customWords: List<WordEntry>? = null) {
         viewModelScope.launch {
-            val wordsToExport = if (onlyFiltered) uiState.value.filteredWords else repository.getAllWordsOnce()
+            val wordsToExport = customWords ?: if (onlyFiltered) uiState.value.filteredWords else repository.getAllWordsOnce()
             if (wordsToExport.isEmpty()) {
                 _events.emit(UiEvent.ShowMessage("لا توجد كلمات لتصديرها حالياً"))
                 return@launch
@@ -607,9 +1120,9 @@ class DictionaryViewModel(application: Application) : AndroidViewModel(applicati
         }
     }
 
-    fun exportToPickedUri(uri: Uri, format: ExportFormat, onlyFiltered: Boolean) {
+    fun exportToPickedUri(uri: Uri, format: ExportFormat, onlyFiltered: Boolean, customWords: List<WordEntry>? = null) {
         viewModelScope.launch {
-            val wordsToExport = if (onlyFiltered) uiState.value.filteredWords else repository.getAllWordsOnce()
+            val wordsToExport = customWords ?: if (onlyFiltered) uiState.value.filteredWords else repository.getAllWordsOnce()
             if (wordsToExport.isEmpty()) {
                 _events.emit(UiEvent.ShowMessage("لا توجد كلمات لتصديرها حالياً"))
                 return@launch
@@ -649,7 +1162,7 @@ class DictionaryViewModel(application: Application) : AndroidViewModel(applicati
                 }
                 _events.emit(
                     UiEvent.ShowMessage(
-                        "تم الاستيراد: أُضيف ${summary.insertedCount} • دُمج ${summary.mergedCount} • تُخطي ${summary.skippedCount}"
+                        "تم الاستيراد: أُضيف ${summary.insertedCount} كلمة جديدة • دُمج ${summary.mergedCount} • تم تجاهل المكرر ${summary.skippedCount}"
                     )
                 )
             } catch (e: Exception) {
@@ -720,11 +1233,18 @@ class DictionaryViewModel(application: Application) : AndroidViewModel(applicati
         partsOfSpeech = entry.partsOfSpeech.map { it.trim() }.filter { it.isNotBlank() }.distinct(),
         synonyms = entry.synonyms.map { it.trim() }.filter { it.isNotBlank() }.distinct(),
         antonyms = entry.antonyms.map { it.trim() }.filter { it.isNotBlank() }.distinct(),
+        prepositions = entry.prepositions.map { it.trim() }.filter { it.isNotBlank() }.distinct(),
+        collocations = entry.collocations.map { it.trim() }.filter { it.isNotBlank() }.distinct(),
         definition = entry.definition.trim(),
         derivatives = entry.derivatives.trim(),
         expressions = entry.expressions.trim(),
+        linguisticNotes = entry.linguisticNotes.trim(),
+        examples = entry.examples.map { it.trim() }.filter { it.isNotBlank() }.distinct(),
+        personalHint = entry.personalHint.trim(),
         notes = entry.notes.trim(),
-        importantNotes = entry.importantNotes.trim()
+        importantNotes = entry.importantNotes.trim(),
+        studyTags = entry.studyTags.map { it.trim() }.filter { it.isNotBlank() }.distinct(),
+        difficulty = entry.difficulty.coerceIn(0, 3)
     )
 
     private fun buildLearningStats(
@@ -737,8 +1257,11 @@ class DictionaryViewModel(application: Application) : AndroidViewModel(applicati
         var reviewingW = 0
         var masteredW = 0
         var dueW = 0
+        var hardW = 0
+        var incompleteW = 0
         var totalRev = 0
         var totalCorrect = 0
+        var totalIntelligenceScore = 0
 
         val bookCounts = mutableMapOf<String, Int>()
         val posCounts = mutableMapOf<String, Int>()
@@ -751,6 +1274,10 @@ class DictionaryViewModel(application: Application) : AndroidViewModel(applicati
                 SrsMaturity.MASTERED -> masteredW++
             }
             if (w.isDueForReview(now)) dueW++
+            if (w.isHardOrMistake()) hardW++
+            val intel = LearningAnalyticsEngine.computeWordIntelligence(w)
+            if (intel.isIncomplete) incompleteW++
+            totalIntelligenceScore += intel.masteryScorePercent
             totalRev += w.srsTotalReviews
             totalCorrect += w.srsCorrectCount
 
@@ -770,6 +1297,14 @@ class DictionaryViewModel(application: Application) : AndroidViewModel(applicati
         }
 
         val accuracy = if (totalRev > 0) ((totalCorrect * 100) / totalRev).coerceIn(0, 100) else 0
+        val masteryPct = if (allWords.isNotEmpty()) {
+            (totalIntelligenceScore / allWords.size).coerceIn(0, 100)
+        } else {
+            0
+        }
+        if (allWords.isNotEmpty()) {
+            preferences.updateTodayMasterySnapshot(masteryPct, now)
+        }
 
         return LearningStatistics(
             totalWords = allWords.size,
@@ -777,11 +1312,16 @@ class DictionaryViewModel(application: Application) : AndroidViewModel(applicati
             learningWords = learningW,
             reviewingWords = reviewingW,
             masteredWords = masteredW,
+            masteryPercent = masteryPct,
             dueToday = dueW,
+            hardOrMistakesCount = hardW,
+            incompleteWordsCount = incompleteW,
             totalReviewsAllTime = totalRev,
             overallAccuracyPercent = accuracy,
             reviewsToday = daily.reviewsToday,
+            miniQuizzesToday = daily.miniQuizzesToday,
             streakDays = daily.currentStreakDays,
+            dailyGoalTarget = daily.dailyGoalTarget,
             bookDistribution = bookCounts.entries.sortedByDescending { it.value }.map { it.key to it.value },
             posDistribution = posCounts.entries.sortedByDescending { it.value }.map { it.key to it.value }
         )
@@ -802,11 +1342,17 @@ class DictionaryViewModel(application: Application) : AndroidViewModel(applicati
                 entry.partsOfSpeech.joinToString(" "),
                 entry.synonyms.joinToString(" "),
                 entry.antonyms.joinToString(" "),
+                entry.prepositions.joinToString(" "),
+                entry.collocations.joinToString(" "),
                 entry.definition,
                 entry.derivatives,
                 entry.expressions,
+                entry.linguisticNotes,
+                entry.examples.joinToString(" "),
+                entry.personalHint,
                 entry.notes,
-                entry.importantNotes
+                entry.importantNotes,
+                entry.studyTags.joinToString(" ")
             )
             SearchField.WORD -> listOf(entry.word)
             SearchField.IPA -> listOf(entry.ipa)
@@ -818,10 +1364,15 @@ class DictionaryViewModel(application: Application) : AndroidViewModel(applicati
             SearchField.PART_OF_SPEECH -> entry.partsOfSpeech
             SearchField.SYNONYMS -> entry.synonyms
             SearchField.ANTONYMS -> entry.antonyms
+            SearchField.PREPOSITIONS -> entry.prepositions
+            SearchField.COLLOCATIONS -> entry.collocations
             SearchField.DEFINITION -> listOf(entry.definition)
             SearchField.DERIVATIVES -> listOf(entry.derivatives)
             SearchField.EXPRESSIONS -> listOf(entry.expressions)
-            SearchField.NOTES -> listOf(entry.notes, entry.importantNotes)
+            SearchField.LINGUISTIC_NOTES -> listOf(entry.linguisticNotes)
+            SearchField.EXAMPLES -> entry.examples
+            SearchField.NOTES -> listOf(entry.notes, entry.importantNotes, entry.personalHint)
+            SearchField.STUDY_TAGS -> entry.studyTags
         }
 
         val haystack = normalize(targetStrings.joinToString(" "))
@@ -894,9 +1445,39 @@ class DictionaryViewModel(application: Application) : AndroidViewModel(applicati
             if (!inSyn && !inAnt) return false
         }
 
+        if (f.prepositionsQuery.isNotBlank()) {
+            val pq = normalize(f.prepositionsQuery)
+            if (entry.prepositions.none { normalize(it).contains(pq) }) return false
+        }
+
+        if (f.collocationsQuery.isNotBlank()) {
+            val cq = normalize(f.collocationsQuery)
+            if (entry.collocations.none { normalize(it).contains(cq) }) return false
+        }
+
+        if (f.linguisticNotesQuery.isNotBlank()) {
+            val lnq = normalize(f.linguisticNotesQuery)
+            val hit = normalize(entry.linguisticNotes).contains(lnq) ||
+                normalize(entry.notes).contains(lnq) ||
+                normalize(entry.importantNotes).contains(lnq)
+            if (!hit) return false
+        }
+
+        if (f.selectedStudyTags.isNotEmpty()) {
+            val entryTags = entry.studyTags.map { normalize(it) }
+            val matched = f.selectedStudyTags.any { sel -> entryTags.contains(normalize(sel)) }
+            if (!matched) return false
+        }
+
+        if (f.selectedDifficulties.isNotEmpty()) {
+            if (!f.selectedDifficulties.contains(entry.difficulty)) return false
+        }
+
         if (f.favoritesOnly && !entry.isFavorite) return false
-        if (f.hasNotesOnly && entry.notes.isBlank() && entry.importantNotes.isBlank()) return false
-        if (f.hasExpressionsOnly && entry.expressions.isBlank()) return false
+        if (f.hasNotesOnly && entry.notes.isBlank() && entry.importantNotes.isBlank() && entry.linguisticNotes.isBlank()) return false
+        if (f.hasExpressionsOnly && entry.expressions.isBlank() && entry.examples.isEmpty()) return false
+        if (f.hardOrMistakesOnly && !entry.isHardOrMistake()) return false
+        if (f.incompleteOnly && !LearningAnalyticsEngine.computeWordIntelligence(entry).isIncomplete) return false
 
         return true
     }
@@ -922,6 +1503,15 @@ class DictionaryViewModel(application: Application) : AndroidViewModel(applicati
             )
             SortOption.FAVORITES_FIRST -> list.sortedWith(
                 compareByDescending<WordEntry> { it.isFavorite }
+                    .thenByDescending { it.createdAt }
+            )
+            SortOption.DIFFICULTY_DESC -> list.sortedWith(
+                compareByDescending<WordEntry> { it.difficulty }
+                    .thenByDescending { it.lastWrongAt }
+                    .thenByDescending { it.createdAt }
+            )
+            SortOption.MOST_REVIEWED -> list.sortedWith(
+                compareByDescending<WordEntry> { it.srsTotalReviews }
                     .thenByDescending { it.createdAt }
             )
         }

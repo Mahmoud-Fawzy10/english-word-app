@@ -34,6 +34,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.automirrored.rounded.Backspace
 import androidx.compose.material.icons.automirrored.rounded.VolumeUp
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Close
@@ -44,7 +45,6 @@ import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Visibility
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -55,11 +55,11 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -76,18 +76,21 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.example.data.model.WordEntry
 import com.example.data.repository.WordRepository
+import com.example.domain.MatchPairItem
 import com.example.domain.QuestionInteractionKind
 import com.example.domain.SrsGrade
 import com.example.domain.SrsScheduler
 import com.example.ui.components.BookPillBadge
 import com.example.ui.components.ManualSrsScheduleDialog
+import com.example.ui.components.QamusiCurvedBlueHeader
 import com.example.ui.theme.CobaltDark
 import com.example.ui.theme.CobaltPrimary
 import com.example.ui.theme.LocalQamusiColors
 import com.example.ui.theme.SkyAccent
 import com.example.ui.viewmodel.QuizSessionState
+import kotlinx.coroutines.delay
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun QuizSessionScreen(
     session: QuizSessionState,
@@ -96,6 +99,8 @@ fun QuizSessionScreen(
     onSelectMcqOption: (String) -> Unit,
     onTypedInputChange: (String) -> Unit,
     onSubmitTyping: () -> Unit,
+    onSubmitScramble: (String) -> Unit,
+    onCompleteMatchRound: (Set<Long>) -> Unit,
     onNextQuestion: () -> Unit,
     onRestart: () -> Unit,
     onSpeakWord: (String) -> Unit,
@@ -111,50 +116,7 @@ fun QuizSessionScreen(
 
     Scaffold(
         modifier = Modifier.fillMaxSize(),
-        containerColor = MaterialTheme.colorScheme.background,
-        topBar = {
-            TopAppBar(
-                title = {
-                    Text(
-                        text = if (session.isFinished) {
-                            "نتيجة الاختبار"
-                        } else {
-                            "سؤال ${session.currentIndex + 1} من ${session.questions.size}"
-                        },
-                        fontWeight = FontWeight.Bold
-                    )
-                },
-                navigationIcon = {
-                    IconButton(
-                        onClick = onExit,
-                        modifier = Modifier.minimumInteractiveComponentSize()
-                    ) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
-                            contentDescription = "إنهاء والعودة"
-                        )
-                    }
-                },
-                actions = {
-                    val curWord = session.currentQuestion?.entry
-                    if (!session.isFinished && curWord != null) {
-                        IconButton(
-                            onClick = { editingSrsWord = curWord },
-                            modifier = Modifier.minimumInteractiveComponentSize()
-                        ) {
-                            Icon(
-                                imageVector = Icons.Rounded.EditCalendar,
-                                contentDescription = "تعديل جدول المراجعة يدوياً",
-                                tint = MaterialTheme.colorScheme.primary
-                            )
-                        }
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.background
-                )
-            )
-        }
+        containerColor = MaterialTheme.colorScheme.background
     ) { innerPadding ->
         Box(
             modifier = Modifier
@@ -164,122 +126,161 @@ fun QuizSessionScreen(
                 .imePadding(),
             contentAlignment = Alignment.TopCenter
         ) {
-            if (session.isFinished) {
-                QuizSummaryContent(
-                    session = session,
-                    onManualAdjustWord = { editingSrsWord = it },
-                    onOpenWordDetail = onOpenWordDetail,
-                    onRestart = onRestart,
-                    onExit = onExit
-                )
-            } else {
-                val question = session.currentQuestion ?: return@Box
-                val entry = question.entry
-                val progress = (session.currentIndex + 1f) / session.questions.size.coerceAtLeast(1)
-                val cardScale by animateFloatAsState(
-                    targetValue = if (session.isAnswerRevealed) 1.01f else 1f,
-                    animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
-                    label = "card_scale"
+            Column(
+                modifier = Modifier
+                    .widthIn(max = 720.dp)
+                    .fillMaxSize()
+            ) {
+                val curWord = session.currentQuestion?.entry
+                QamusiCurvedBlueHeader(
+                    title = if (session.isFinished) "نتيجة الاختبار" else "مراجعة سريعة",
+                    leadingIcon = Icons.AutoMirrored.Rounded.ArrowBack,
+                    leadingContentDescription = "رجوع",
+                    onLeadingClick = onExit,
+                    secondaryTrailingIcon = if (!session.isFinished && curWord != null) Icons.Rounded.EditCalendar else null,
+                    secondaryTrailingDescription = "تعديل جدول المراجعة يدوياً",
+                    onSecondaryTrailingClick = { if (curWord != null) editingSrsWord = curWord },
+                    trailingIcon = Icons.Rounded.Close,
+                    trailingContentDescription = "إغلاق",
+                    onTrailingClick = onExit,
+                    bottomCornerRadius = 26.dp
                 )
 
-                Column(
-                    modifier = Modifier
-                        .widthIn(max = 700.dp)
-                        .fillMaxSize()
-                        .verticalScroll(rememberScrollState())
-                        .padding(horizontal = 16.dp, vertical = 10.dp),
-                    verticalArrangement = Arrangement.spacedBy(14.dp)
-                ) {
-                    LinearProgressIndicator(
-                        progress = { progress },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(10.dp)
-                            .clip(CircleShape),
-                        color = MaterialTheme.colorScheme.primary,
-                        trackColor = MaterialTheme.colorScheme.primaryContainer
+                if (session.isFinished) {
+                    QuizSummaryContent(
+                        session = session,
+                        onManualAdjustWord = { editingSrsWord = it },
+                        onOpenWordDetail = onOpenWordDetail,
+                        onRestart = onRestart,
+                        onExit = onExit
+                    )
+                } else {
+                    val question = session.currentQuestion ?: return@Column
+                    val entry = question.entry
+                    val progress = (session.currentIndex + 1f) / session.questions.size.coerceAtLeast(1)
+                    val cardScale by animateFloatAsState(
+                        targetValue = if (session.isAnswerRevealed) 1.01f else 1f,
+                        animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
+                        label = "card_scale"
                     )
 
-                    // Prompt Card with Question Type Badge & Offline TTS
-                    Surface(
+                    Column(
                         modifier = Modifier
-                            .fillMaxWidth()
-                            .graphicsLayer(scaleX = cardScale, scaleY = cardScale),
-                        shape = RoundedCornerShape(30.dp),
-                        color = MaterialTheme.colorScheme.surface,
-                        shadowElevation = 4.dp,
-                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+                            .fillMaxSize()
+                            .verticalScroll(rememberScrollState())
+                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                        verticalArrangement = Arrangement.spacedBy(14.dp)
                     ) {
-                        Column(
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = question.badgeLabel,
+                                style = MaterialTheme.typography.titleSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = "${session.currentIndex + 1} / ${session.questions.size}",
+                                style = MaterialTheme.typography.titleSmall,
+                                color = MaterialTheme.colorScheme.primary,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+
+                        LinearProgressIndicator(
+                            progress = { progress },
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(22.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.spacedBy(10.dp)
-                        ) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Surface(
-                                    shape = RoundedCornerShape(50),
-                                    color = MaterialTheme.colorScheme.primaryContainer
-                                ) {
-                                    Text(
-                                        text = question.badgeLabel,
-                                        style = MaterialTheme.typography.labelLarge,
-                                        color = MaterialTheme.colorScheme.primary,
-                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp)
-                                    )
-                                }
+                                .height(9.dp)
+                                .clip(CircleShape),
+                            color = Color(0xFF16A34A),
+                            trackColor = MaterialTheme.colorScheme.surfaceVariant
+                        )
 
-                                if (entry.word.isNotBlank()) {
-                                    IconButton(
-                                        onClick = { onSpeakWord(entry.word) },
-                                        modifier = Modifier
-                                            .minimumInteractiveComponentSize()
-                                            .testTag("quiz_speak_button")
+                        // Centered Clean Prompt Block matching Reference Screen 10
+                        Surface(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .graphicsLayer(scaleX = cardScale, scaleY = cardScale),
+                            shape = RoundedCornerShape(24.dp),
+                            color = MaterialTheme.colorScheme.surface,
+                            shadowElevation = 2.dp,
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+                        ) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 18.dp, vertical = 20.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                if (entry.word.isNotBlank() && question.interactionKind != QuestionInteractionKind.SCRAMBLE &&
+                                    question.interactionKind != QuestionInteractionKind.MATCH_PAIRS
+                                ) {
+                                    Surface(
+                                        shape = CircleShape,
+                                        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.7f)
                                     ) {
-                                        Icon(
-                                            imageVector = Icons.AutoMirrored.Rounded.VolumeUp,
-                                            contentDescription = "نطق الكلمة",
-                                            tint = MaterialTheme.colorScheme.primary
-                                        )
+                                        IconButton(
+                                            onClick = { onSpeakWord(entry.word) },
+                                            modifier = Modifier
+                                                .minimumInteractiveComponentSize()
+                                                .testTag("quiz_speak_button")
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.AutoMirrored.Rounded.VolumeUp,
+                                                contentDescription = "نطق الكلمة",
+                                                tint = MaterialTheme.colorScheme.primary
+                                            )
+                                        }
                                     }
                                 }
-                            }
 
-                            if (entry.books.isNotEmpty()) {
-                                FlowRow(
-                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                                ) {
-                                    entry.books.forEach { BookPillBadge(it) }
-                                }
-                            }
-
-                            Text(
-                                text = question.promptText,
-                                style = MaterialTheme.typography.headlineMedium,
-                                color = MaterialTheme.colorScheme.onSurface,
-                                textAlign = TextAlign.Center
-                            )
-
-                            if (question.hintText.isNotBlank()) {
                                 Text(
-                                    text = question.hintText,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    text = question.promptText,
+                                    style = MaterialTheme.typography.headlineMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onSurface,
                                     textAlign = TextAlign.Center
                                 )
+
+                                if (entry.books.isNotEmpty() && question.interactionKind != QuestionInteractionKind.MATCH_PAIRS) {
+                                    FlowRow(
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally),
+                                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        entry.books.forEach { BookPillBadge(it) }
+                                    }
+                                }
+
+                                if (question.hintText.isNotBlank()) {
+                                    Text(
+                                        text = question.hintText,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        textAlign = TextAlign.Center
+                                    )
+                                }
                             }
                         }
-                    }
 
                     when (question.interactionKind) {
                         QuestionInteractionKind.FLASHCARD -> {
                             if (!session.isAnswerRevealed) {
+                                if (entry.personalHint.isNotBlank()) {
+                                    OutlinedButton(
+                                        onClick = { showHintLetter = !showHintLetter },
+                                        shape = RoundedCornerShape(50),
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Icon(Icons.Rounded.Lightbulb, contentDescription = null, modifier = Modifier.size(18.dp))
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text(if (showHintLetter) entry.personalHint else "إظهار التلميح الذهني")
+                                    }
+                                }
                                 Button(
                                     onClick = onRevealFlashcard,
                                     modifier = Modifier
@@ -316,11 +317,7 @@ fun QuizSessionScreen(
                                                 fontWeight = FontWeight.Bold
                                             )
                                             if (entry.ipa.isNotBlank()) {
-                                                Text(
-                                                    text = "النطق: ${entry.ipa}",
-                                                    style = MaterialTheme.typography.bodyMedium,
-                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                                )
+                                                Text("النطق: ${entry.ipa}", style = MaterialTheme.typography.bodyMedium)
                                             }
                                             if (entry.synonyms.isNotEmpty()) {
                                                 FlowRow(
@@ -356,16 +353,22 @@ fun QuizSessionScreen(
                                                     }
                                                 }
                                             }
+                                            if (entry.prepositions.isNotEmpty()) {
+                                                Text("حروف الجر: ${entry.prepositions.joinToString("، ")}", style = MaterialTheme.typography.bodyMedium)
+                                            }
+                                            if (entry.collocations.isNotEmpty()) {
+                                                Text("المتلازمات: ${entry.collocations.joinToString("، ")}", style = MaterialTheme.typography.bodyMedium)
+                                            }
                                             if (entry.definition.isNotBlank()) {
                                                 Text("التعريف: ${entry.definition}", style = MaterialTheme.typography.bodyMedium)
                                             }
                                             if (entry.derivatives.isNotBlank()) {
                                                 Text("الاشتقاقات: ${entry.derivatives}", style = MaterialTheme.typography.bodyMedium)
                                             }
-                                            if (entry.expressions.isNotBlank()) {
-                                                Text("التعبيرات: ${entry.expressions}", style = MaterialTheme.typography.bodyMedium)
+                                            if (entry.examples.isNotEmpty()) {
+                                                Text("مثال: ${entry.examples.first()}", style = MaterialTheme.typography.bodyMedium)
                                             }
-                                            val note = entry.importantNotes.ifBlank { entry.notes }
+                                            val note = entry.linguisticNotes.ifBlank { entry.importantNotes.ifBlank { entry.notes } }
                                             if (note.isNotBlank()) {
                                                 Text("ملاحظات: $note", style = MaterialTheme.typography.bodyMedium)
                                             }
@@ -442,16 +445,8 @@ fun QuizSessionScreen(
                                             MaterialTheme.colorScheme.outline,
                                             MaterialTheme.colorScheme.onSurface
                                         )
-                                        isRightOption -> Triple(
-                                            palette.successBg,
-                                            palette.successBorder,
-                                            palette.successText
-                                        )
-                                        isSelected && !isRightOption -> Triple(
-                                            palette.dangerBg,
-                                            palette.dangerBorder,
-                                            palette.dangerText
-                                        )
+                                        isRightOption -> Triple(palette.successBg, palette.successBorder, palette.successText)
+                                        isSelected && !isRightOption -> Triple(palette.dangerBg, palette.dangerBorder, palette.dangerText)
                                         else -> Triple(
                                             MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
                                             MaterialTheme.colorScheme.outlineVariant,
@@ -481,17 +476,9 @@ fun QuizSessionScreen(
                                                 modifier = Modifier.weight(1f)
                                             )
                                             if (answered && isRightOption) {
-                                                Icon(
-                                                    Icons.Rounded.CheckCircle,
-                                                    contentDescription = null,
-                                                    tint = palette.successBorder
-                                                )
+                                                Icon(Icons.Rounded.CheckCircle, contentDescription = null, tint = palette.successBorder)
                                             } else if (answered && isSelected && !isRightOption) {
-                                                Icon(
-                                                    Icons.Rounded.Close,
-                                                    contentDescription = null,
-                                                    tint = palette.dangerBorder
-                                                )
+                                                Icon(Icons.Rounded.Close, contentDescription = null, tint = palette.dangerBorder)
                                             }
                                         }
                                     }
@@ -563,8 +550,12 @@ fun QuizSessionScreen(
                                     }
                                 }
                                 if (showHintLetter && hintSample.isNotBlank()) {
+                                    val hintStr = buildString {
+                                        append("تبدأ بـ: ${hintSample.take(2)}... (${hintSample.length} حرف)")
+                                        if (entry.personalHint.isNotBlank()) append(" • ${entry.personalHint}")
+                                    }
                                     Text(
-                                        text = "تبدأ بـ: ${hintSample.take(2)}... (${hintSample.length} حرف)",
+                                        text = hintStr,
                                         style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.primary
                                     )
@@ -577,10 +568,7 @@ fun QuizSessionScreen(
                                     color = if (ok) palette.successBg else palette.dangerBg,
                                     border = BorderStroke(1.dp, if (ok) palette.successBorder else palette.dangerBorder)
                                 ) {
-                                    Column(
-                                        modifier = Modifier.padding(16.dp),
-                                        verticalArrangement = Arrangement.spacedBy(4.dp)
-                                    ) {
+                                    Column(modifier = Modifier.padding(16.dp)) {
                                         Text(
                                             text = if (ok) {
                                                 "إجابة صحيحة! تم جدولة المراجعة القادمة"
@@ -607,10 +595,34 @@ fun QuizSessionScreen(
                                 }
                             }
                         }
+
+                        QuestionInteractionKind.SCRAMBLE -> {
+                            ScrambleMiniQuizBoard(
+                                questionKey = session.currentIndex,
+                                tiles = question.scrambleTiles,
+                                targetAnswer = question.answerText,
+                                checkedCorrect = session.lastScrambleCorrect,
+                                isLastQuestion = session.currentIndex + 1 >= session.questions.size,
+                                onSubmitScramble = onSubmitScramble,
+                                onNextQuestion = onNextQuestion
+                            )
+                        }
+
+                        QuestionInteractionKind.MATCH_PAIRS -> {
+                            MatchPairsMiniQuizBoard(
+                                roundKey = session.currentIndex,
+                                pairs = question.matchPairs,
+                                isRoundCompleted = session.matchRoundCompleted,
+                                isLastQuestion = session.currentIndex + 1 >= session.questions.size,
+                                onRoundCompleted = onCompleteMatchRound,
+                                onNextQuestion = onNextQuestion
+                            )
+                        }
                     }
                 }
             }
         }
+    }
     }
 
     editingSrsWord?.let { target ->
@@ -624,6 +636,259 @@ fun QuizSessionScreen(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun ScrambleMiniQuizBoard(
+    questionKey: Int,
+    tiles: List<String>,
+    targetAnswer: String,
+    checkedCorrect: Boolean?,
+    isLastQuestion: Boolean,
+    onSubmitScramble: (String) -> Unit,
+    onNextQuestion: () -> Unit
+) {
+    val palette = LocalQamusiColors.current
+    val chosenIndices = remember(questionKey, tiles) { mutableStateListOf<Int>() }
+    val assembled = chosenIndices.joinToString("") { idx -> tiles.getOrNull(idx).orEmpty() }
+    val checked = checkedCorrect != null
+
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(22.dp),
+            color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f),
+            border = BorderStroke(1.5.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.4f))
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(18.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = assembled.ifBlank { "اضغط على الحروف بالترتيب لتكوين الكلمة..." },
+                    style = MaterialTheme.typography.headlineSmall,
+                    color = if (assembled.isBlank()) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.Bold,
+                    textAlign = TextAlign.Center
+                )
+            }
+        }
+
+        if (!checked) {
+            FlowRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                tiles.forEachIndexed { idx, letter ->
+                    val used = chosenIndices.contains(idx)
+                    Surface(
+                        modifier = Modifier
+                            .minimumInteractiveComponentSize()
+                            .clip(RoundedCornerShape(16.dp))
+                            .clickable(enabled = !used) { chosenIndices.add(idx) },
+                        shape = RoundedCornerShape(16.dp),
+                        color = if (used) MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f) else MaterialTheme.colorScheme.primaryContainer,
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
+                    ) {
+                        Text(
+                            text = if (letter == " ") "␣" else letter,
+                            style = MaterialTheme.typography.titleLarge,
+                            color = if (used) MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f) else MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
+                        )
+                    }
+                }
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedButton(
+                    onClick = { if (chosenIndices.isNotEmpty()) chosenIndices.removeAt(chosenIndices.lastIndex) },
+                    enabled = chosenIndices.isNotEmpty(),
+                    shape = RoundedCornerShape(50),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Icon(Icons.AutoMirrored.Rounded.Backspace, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("تراجع")
+                }
+                Button(
+                    onClick = { onSubmitScramble(assembled) },
+                    enabled = assembled.isNotBlank(),
+                    shape = RoundedCornerShape(50),
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag("check_scramble_button")
+                ) {
+                    Text("تحقق")
+                }
+            }
+        } else {
+            val ok = checkedCorrect == true
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(22.dp),
+                color = if (ok) palette.successBg else palette.dangerBg,
+                border = BorderStroke(1.dp, if (ok) palette.successBorder else palette.dangerBorder)
+            ) {
+                Text(
+                    text = if (ok) "أحسنت! ترتيب صحيح: $targetAnswer" else "الصحيح هو: $targetAnswer",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = if (ok) palette.successText else palette.dangerText,
+                    modifier = Modifier.padding(16.dp)
+                )
+            }
+            Button(
+                onClick = onNextQuestion,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(54.dp)
+                    .testTag("next_question_button"),
+                shape = RoundedCornerShape(50)
+            ) {
+                Text(if (isLastQuestion) "عرض النتيجة" else "السؤال التالي", style = MaterialTheme.typography.titleMedium)
+            }
+        }
+    }
+}
+
+@Composable
+private fun MatchPairsMiniQuizBoard(
+    roundKey: Int,
+    pairs: List<MatchPairItem>,
+    isRoundCompleted: Boolean,
+    isLastQuestion: Boolean,
+    onRoundCompleted: (Set<Long>) -> Unit,
+    onNextQuestion: () -> Unit
+) {
+    val palette = LocalQamusiColors.current
+    val shuffledRight = remember(roundKey, pairs) { pairs.shuffled() }
+    var selectedLeftId by remember(roundKey) { mutableStateOf<Long?>(null) }
+    var wrongRightId by remember(roundKey) { mutableStateOf<Long?>(null) }
+    var matchedIds by remember(roundKey) { mutableStateOf<Set<Long>>(emptySet()) }
+    var mistakenIds by remember(roundKey) { mutableStateOf<Set<Long>>(emptySet()) }
+
+    LaunchedEffect(wrongRightId) {
+        if (wrongRightId != null) {
+            delay(500)
+            wrongRightId = null
+        }
+    }
+
+    LaunchedEffect(matchedIds.size, pairs.size) {
+        if (pairs.isNotEmpty() && matchedIds.size == pairs.size && !isRoundCompleted) {
+            onRoundCompleted(mistakenIds)
+        }
+    }
+
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        pairs.indices.forEach { rowIdx ->
+            val leftItem = pairs[rowIdx]
+            val rightItem = shuffledRight[rowIdx]
+            val leftMatched = matchedIds.contains(leftItem.entry.id)
+            val rightMatched = matchedIds.contains(rightItem.entry.id)
+            val leftSelected = selectedLeftId == leftItem.entry.id
+            val isWrongRight = wrongRightId == rightItem.entry.id
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Surface(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(18.dp))
+                        .clickable(enabled = !leftMatched && !isRoundCompleted) {
+                            selectedLeftId = if (leftSelected) null else leftItem.entry.id
+                        },
+                    shape = RoundedCornerShape(18.dp),
+                    color = when {
+                        leftMatched -> palette.successBg
+                        leftSelected -> MaterialTheme.colorScheme.primaryContainer
+                        else -> MaterialTheme.colorScheme.surface
+                    },
+                    border = BorderStroke(
+                        width = if (leftSelected) 2.dp else 1.dp,
+                        color = when {
+                            leftMatched -> palette.successBorder
+                            leftSelected -> MaterialTheme.colorScheme.primary
+                            else -> MaterialTheme.colorScheme.outline
+                        }
+                    )
+                ) {
+                    Text(
+                        text = leftItem.leftText,
+                        style = MaterialTheme.typography.titleSmall,
+                        color = if (leftMatched) palette.successText else MaterialTheme.colorScheme.onSurface,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 14.dp)
+                    )
+                }
+
+                Surface(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(18.dp))
+                        .clickable(enabled = !rightMatched && selectedLeftId != null && !isRoundCompleted) {
+                            val leftId = selectedLeftId ?: return@clickable
+                            if (leftId == rightItem.entry.id) {
+                                matchedIds = matchedIds + leftId
+                                selectedLeftId = null
+                            } else {
+                                mistakenIds = mistakenIds + leftId + rightItem.entry.id
+                                wrongRightId = rightItem.entry.id
+                                selectedLeftId = null
+                            }
+                        },
+                    shape = RoundedCornerShape(18.dp),
+                    color = when {
+                        rightMatched -> palette.successBg
+                        isWrongRight -> palette.dangerBg
+                        else -> MaterialTheme.colorScheme.surface
+                    },
+                    border = BorderStroke(
+                        width = 1.dp,
+                        color = when {
+                            rightMatched -> palette.successBorder
+                            isWrongRight -> palette.dangerBorder
+                            else -> MaterialTheme.colorScheme.outline
+                        }
+                    )
+                ) {
+                    Text(
+                        text = rightItem.rightText,
+                        style = MaterialTheme.typography.titleSmall,
+                        color = when {
+                            rightMatched -> palette.successText
+                            isWrongRight -> palette.dangerText
+                            else -> MaterialTheme.colorScheme.onSurface
+                        },
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 14.dp)
+                    )
+                }
+            }
+        }
+
+        if (isRoundCompleted) {
+            Button(
+                onClick = onNextQuestion,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(54.dp)
+                    .testTag("next_question_button"),
+                shape = RoundedCornerShape(50)
+            ) {
+                Text(if (isLastQuestion) "عرض النتيجة" else "الجولة التالية", style = MaterialTheme.typography.titleMedium)
+            }
+        }
+    }
+}
+
 @Composable
 private fun SrsGradePillButton(
     grade: SrsGrade,
@@ -633,9 +898,7 @@ private fun SrsGradePillButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val preview = remember(entry.id, grade) {
-        SrsScheduler.scheduleNext(entry, grade)
-    }
+    val preview = remember(entry.id, grade) { SrsScheduler.scheduleNext(entry, grade) }
     Surface(
         modifier = modifier
             .clip(RoundedCornerShape(22.dp))
@@ -650,17 +913,8 @@ private fun SrsGradePillButton(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(2.dp)
         ) {
-            Text(
-                text = grade.labelAr,
-                style = MaterialTheme.typography.titleSmall,
-                color = fgColor,
-                fontWeight = FontWeight.Bold
-            )
-            Text(
-                text = SrsScheduler.formatDaysAr(preview.intervalDays),
-                style = MaterialTheme.typography.labelSmall,
-                color = fgColor.copy(alpha = 0.85f)
-            )
+            Text(text = grade.labelAr, style = MaterialTheme.typography.titleSmall, color = fgColor, fontWeight = FontWeight.Bold)
+            Text(text = SrsScheduler.formatDaysAr(preview.intervalDays), style = MaterialTheme.typography.labelSmall, color = fgColor.copy(alpha = 0.85f))
         }
     }
 }
@@ -694,27 +948,13 @@ private fun QuizSummaryContent(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(
-                        Brush.linearGradient(listOf(CobaltDark, CobaltPrimary, SkyAccent))
-                    )
+                    .background(Brush.linearGradient(listOf(CobaltDark, CobaltPrimary, SkyAccent)))
                     .padding(24.dp),
                 contentAlignment = Alignment.Center
             ) {
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Rounded.EmojiEvents,
-                        contentDescription = null,
-                        tint = Color.White,
-                        modifier = Modifier.size(48.dp)
-                    )
-                    Text(
-                        text = "$correct / ${session.records.size} ($percent%)",
-                        style = MaterialTheme.typography.displaySmall,
-                        color = Color.White
-                    )
+                Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Icon(imageVector = Icons.Rounded.EmojiEvents, contentDescription = null, tint = Color.White, modifier = Modifier.size(48.dp))
+                    Text(text = "$correct / ${session.records.size} ($percent%)", style = MaterialTheme.typography.displaySmall, color = Color.White)
                     Text(
                         text = "تم تحديث جدول المراجعة الذكي (SRS) لكل كلمة تلقائياً",
                         style = MaterialTheme.typography.bodyMedium,
@@ -733,10 +973,7 @@ private fun QuizSummaryContent(
                     .clickable { onOpenWordDetail(rec.entry.id) },
                 shape = RoundedCornerShape(22.dp),
                 color = MaterialTheme.colorScheme.surface,
-                border = BorderStroke(
-                    1.dp,
-                    if (rec.isCorrect) palette.successBorder else palette.dangerBorder
-                )
+                border = BorderStroke(1.dp, if (rec.isCorrect) palette.successBorder else palette.dangerBorder)
             ) {
                 Row(
                     modifier = Modifier
@@ -746,32 +983,14 @@ private fun QuizSummaryContent(
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = rec.entry.displayTitle(),
-                            style = MaterialTheme.typography.titleMedium,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
+                        Text(text = rec.entry.displayTitle(), style = MaterialTheme.typography.titleMedium)
                         if (rec.entry.arabicMeaning.isNotBlank()) {
-                            Text(
-                                text = rec.entry.arabicMeaning,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.primary
-                            )
+                            Text(text = rec.entry.arabicMeaning, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
                         }
                     }
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        IconButton(
-                            onClick = { onManualAdjustWord(rec.entry) },
-                            modifier = Modifier.minimumInteractiveComponentSize()
-                        ) {
-                            Icon(
-                                imageVector = Icons.Rounded.EditCalendar,
-                                contentDescription = "تعديل الجدول",
-                                tint = MaterialTheme.colorScheme.primary
-                            )
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        IconButton(onClick = { onManualAdjustWord(rec.entry) }, modifier = Modifier.minimumInteractiveComponentSize()) {
+                            Icon(imageVector = Icons.Rounded.EditCalendar, contentDescription = "تعديل الجدول", tint = MaterialTheme.colorScheme.primary)
                         }
                         Icon(
                             imageVector = if (rec.isCorrect) Icons.Rounded.CheckCircle else Icons.Rounded.Close,
@@ -783,24 +1002,13 @@ private fun QuizSummaryContent(
             }
         }
 
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            OutlinedButton(
-                onClick = onExit,
-                modifier = Modifier
-                    .weight(1f)
-                    .height(52.dp),
-                shape = RoundedCornerShape(50)
-            ) {
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            OutlinedButton(onClick = onExit, modifier = Modifier.weight(1f).height(52.dp), shape = RoundedCornerShape(50)) {
                 Text("إنهاء")
             }
             Button(
                 onClick = onRestart,
-                modifier = Modifier
-                    .weight(1f)
-                    .height(52.dp),
+                modifier = Modifier.weight(1f).height(52.dp),
                 shape = RoundedCornerShape(50),
                 colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
             ) {

@@ -1,7 +1,8 @@
 package com.example.ui.components
 
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -14,10 +15,12 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.VolumeUp
 import androidx.compose.material.icons.rounded.Category
+import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material.icons.rounded.LocationOn
+import androidx.compose.material.icons.rounded.RadioButtonUnchecked
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -33,6 +36,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.example.data.model.WordDifficulty
 import com.example.data.model.WordEntry
 import com.example.ui.theme.LocalQamusiColors
 
@@ -62,6 +66,32 @@ fun buildPosGroups(words: List<WordEntry>): List<Pair<String, List<WordEntry>>> 
     return map.entries
         .sortedWith(compareByDescending<Map.Entry<String, MutableList<WordEntry>>> { it.value.size }.thenBy { it.key })
         .map { it.key to it.value.toList() }
+}
+
+fun buildStudyTagGroups(words: List<WordEntry>): List<Pair<String, List<WordEntry>>> {
+    val map = linkedMapOf<String, MutableList<WordEntry>>()
+    for (word in words) {
+        val tags = if (word.studyTags.isEmpty()) listOf("بدون مجموعة") else word.studyTags
+        for (tag in tags) {
+            map.getOrPut(tag) { mutableListOf() }.add(word)
+        }
+    }
+    return map.entries
+        .sortedWith(compareByDescending<Map.Entry<String, MutableList<WordEntry>>> { it.value.size }.thenBy { it.key })
+        .map { it.key to it.value.toList() }
+}
+
+fun buildDifficultyGroups(words: List<WordEntry>): List<Pair<String, List<WordEntry>>> {
+    val order = listOf(3, 2, 1, 0)
+    return order.mapNotNull { lvl ->
+        val matching = words.filter { it.difficulty == lvl }
+        if (matching.isEmpty()) {
+            null
+        } else {
+            val label = WordDifficulty.entries.firstOrNull { it.level == lvl }?.labelAr ?: "عادي"
+            label to matching
+        }
+    }
 }
 
 fun buildCurriculumGroups(words: List<WordEntry>): List<CurriculumUnitGroup> {
@@ -172,7 +202,7 @@ fun GroupSectionHeader(
     }
 }
 
-@OptIn(ExperimentalLayoutApi::class)
+@OptIn(ExperimentalLayoutApi::class, ExperimentalFoundationApi::class)
 @Composable
 fun WordSummaryCard(
     entry: WordEntry,
@@ -180,20 +210,33 @@ fun WordSummaryCard(
     onToggleFavorite: () -> Unit,
     onSpeakWord: (String) -> Unit,
     modifier: Modifier = Modifier,
-    subHeaderTag: String? = null
+    subHeaderTag: String? = null,
+    selectionMode: Boolean = false,
+    isSelected: Boolean = false,
+    onLongClick: (() -> Unit)? = null
 ) {
     val palette = LocalQamusiColors.current
     Surface(
         modifier = modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(26.dp))
-            .clickable { onClick() }
+            .combinedClickable(
+                onClick = onClick,
+                onLongClick = onLongClick
+            )
             .testTag("word_card_${entry.id}"),
         shape = RoundedCornerShape(26.dp),
-        color = MaterialTheme.colorScheme.surface,
-        tonalElevation = 1.dp,
+        color = if (isSelected) {
+            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
+        } else {
+            MaterialTheme.colorScheme.surface
+        },
+        tonalElevation = if (isSelected) 4.dp else 1.dp,
         shadowElevation = 2.dp,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+        border = BorderStroke(
+            width = if (isSelected) 2.dp else 1.dp,
+            color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant
+        )
     ) {
         Column(
             modifier = Modifier.padding(16.dp),
@@ -230,34 +273,48 @@ fun WordSummaryCard(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.Top
             ) {
-                Column(
+                Row(
                     modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                    verticalAlignment = Alignment.Top,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        Text(
-                            text = entry.displayTitle(),
-                            style = MaterialTheme.typography.titleLarge,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            modifier = Modifier.weight(1f, fill = false)
+                    if (selectionMode) {
+                        Icon(
+                            imageVector = if (isSelected) Icons.Rounded.CheckCircle else Icons.Rounded.RadioButtonUnchecked,
+                            contentDescription = if (isSelected) "محدد" else "غير محدد",
+                            tint = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = 4.dp)
                         )
-                        if (entry.ipa.isNotBlank()) {
+                    }
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
                             Text(
-                                text = entry.ipa,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                text = entry.displayTitle(),
+                                style = MaterialTheme.typography.titleLarge,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.weight(1f, fill = false)
+                            )
+                            if (entry.ipa.isNotBlank()) {
+                                Text(
+                                    text = entry.ipa,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                        if (entry.arabicMeaning.isNotBlank() && entry.word.isNotBlank()) {
+                            Text(
+                                text = entry.arabicMeaning,
+                                style = MaterialTheme.typography.titleMedium,
+                                color = MaterialTheme.colorScheme.primary
                             )
                         }
-                    }
-                    if (entry.arabicMeaning.isNotBlank() && entry.word.isNotBlank()) {
-                        Text(
-                            text = entry.arabicMeaning,
-                            style = MaterialTheme.typography.titleMedium,
-                            color = MaterialTheme.colorScheme.primary
-                        )
                     }
                 }
 
@@ -265,8 +322,11 @@ fun WordSummaryCard(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(2.dp)
                 ) {
+                    if (entry.difficulty > 0) {
+                        DifficultyPillBadge(difficulty = entry.difficulty)
+                    }
                     SrsStatusBadge(entry = entry)
-                    if (entry.word.isNotBlank()) {
+                    if (!selectionMode && entry.word.isNotBlank()) {
                         IconButton(
                             onClick = { onSpeakWord(entry.word) },
                             modifier = Modifier
@@ -280,20 +340,22 @@ fun WordSummaryCard(
                             )
                         }
                     }
-                    IconButton(
-                        onClick = onToggleFavorite,
-                        modifier = Modifier.minimumInteractiveComponentSize()
-                    ) {
-                        Icon(
-                            imageVector = if (entry.isFavorite) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
-                            contentDescription = if (entry.isFavorite) "إزالة من المفضلة" else "إضافة للمفضلة",
-                            tint = if (entry.isFavorite) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                    if (!selectionMode) {
+                        IconButton(
+                            onClick = onToggleFavorite,
+                            modifier = Modifier.minimumInteractiveComponentSize()
+                        ) {
+                            Icon(
+                                imageVector = if (entry.isFavorite) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
+                                contentDescription = if (entry.isFavorite) "إزالة من المفضلة" else "إضافة للمفضلة",
+                                tint = if (entry.isFavorite) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                     }
                 }
             }
 
-            if (entry.books.isNotEmpty() || entry.partsOfSpeech.isNotEmpty()) {
+            if (entry.books.isNotEmpty() || entry.partsOfSpeech.isNotEmpty() || entry.studyTags.isNotEmpty()) {
                 FlowRow(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                     verticalArrangement = Arrangement.spacedBy(6.dp)
@@ -311,6 +373,20 @@ fun WordSummaryCard(
                                 style = MaterialTheme.typography.labelMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                            )
+                        }
+                    }
+                    entry.studyTags.take(2).forEach { tag ->
+                        Surface(
+                            shape = RoundedCornerShape(50),
+                            color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.7f)
+                        ) {
+                            Text(
+                                text = "#$tag",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.primary,
+                                fontWeight = FontWeight.SemiBold,
+                                modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp)
                             )
                         }
                     }
@@ -358,26 +434,40 @@ fun WordSummaryCard(
                 }
             }
 
-            if (entry.synonyms.isNotEmpty()) {
+            if (entry.synonyms.isNotEmpty() || entry.antonyms.isNotEmpty() || entry.prepositions.isNotEmpty()) {
                 FlowRow(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                     verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    Text(
-                        text = "مرادفات:",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.align(Alignment.CenterVertically)
-                    )
-                    entry.synonyms.take(3).forEach { syn ->
-                        Surface(
-                            shape = RoundedCornerShape(50),
-                            color = palette.synonymBg
-                        ) {
+                    entry.synonyms.take(2).forEach { syn ->
+                        Surface(shape = RoundedCornerShape(50), color = palette.synonymBg) {
                             Text(
-                                text = syn,
+                                text = "= $syn",
                                 style = MaterialTheme.typography.labelMedium,
                                 color = palette.synonymText,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                            )
+                        }
+                    }
+                    entry.antonyms.take(2).forEach { ant ->
+                        Surface(shape = RoundedCornerShape(50), color = palette.antonymBg) {
+                            Text(
+                                text = "≠ $ant",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = palette.antonymText,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                            )
+                        }
+                    }
+                    entry.prepositions.take(2).forEach { prep ->
+                        Surface(
+                            shape = RoundedCornerShape(50),
+                            color = MaterialTheme.colorScheme.secondaryContainer
+                        ) {
+                            Text(
+                                text = prep,
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSecondaryContainer,
                                 modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
                             )
                         }
@@ -385,7 +475,9 @@ fun WordSummaryCard(
                 }
             }
 
-            val previewNote = entry.importantNotes.ifBlank { entry.notes.ifBlank { entry.definition } }
+            val previewNote = entry.linguisticNotes.ifBlank {
+                entry.importantNotes.ifBlank { entry.notes.ifBlank { entry.definition } }
+            }
             if (previewNote.isNotBlank()) {
                 Text(
                     text = previewNote,
@@ -396,5 +488,28 @@ fun WordSummaryCard(
                 )
             }
         }
+    }
+}
+
+@Composable
+fun DifficultyPillBadge(difficulty: Int) {
+    val palette = LocalQamusiColors.current
+    val (label, bg, fg) = when (difficulty) {
+        1 -> Triple("سهل", palette.successBg, palette.successText)
+        2 -> Triple("متوسط", palette.warningBg, palette.warningText)
+        3 -> Triple("صعب", palette.dangerBg, palette.dangerText)
+        else -> return
+    }
+    Surface(
+        shape = RoundedCornerShape(50),
+        color = bg
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = fg,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+        )
     }
 }

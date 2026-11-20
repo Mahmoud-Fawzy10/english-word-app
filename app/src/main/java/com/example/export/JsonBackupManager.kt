@@ -13,7 +13,7 @@ import java.util.Locale
 
 object JsonBackupManager {
 
-    private const val BACKUP_FORMAT_VERSION = 1
+    private const val BACKUP_FORMAT_VERSION = 2
 
     fun suggestedBackupFileName(): String {
         val stamp = SimpleDateFormat("yyyyMMdd_HHmm", Locale.US).format(Date())
@@ -73,11 +73,19 @@ object JsonBackupManager {
         put("partsOfSpeech", JSONArray(entry.partsOfSpeech))
         put("synonyms", JSONArray(entry.synonyms))
         put("antonyms", JSONArray(entry.antonyms))
+        put("prepositions", JSONArray(entry.prepositions))
+        put("collocations", JSONArray(entry.collocations))
         put("definition", entry.definition)
         put("derivatives", entry.derivatives)
         put("expressions", entry.expressions)
+        put("linguisticNotes", entry.linguisticNotes)
+        put("examples", JSONArray(entry.examples))
+        put("personalHint", entry.personalHint)
         put("notes", entry.notes)
         put("importantNotes", entry.importantNotes)
+        put("difficulty", entry.difficulty)
+        put("studyTags", JSONArray(entry.studyTags))
+        put("lastWrongAt", entry.lastWrongAt)
         put("isFavorite", entry.isFavorite)
         put("createdAt", entry.createdAt)
         put("updatedAt", entry.updatedAt)
@@ -116,11 +124,19 @@ object JsonBackupManager {
             partsOfSpeech = jsonArrayToStrings(obj.optJSONArray("partsOfSpeech")),
             synonyms = jsonArrayToStrings(obj.optJSONArray("synonyms")),
             antonyms = jsonArrayToStrings(obj.optJSONArray("antonyms")),
+            prepositions = jsonArrayToStrings(obj.optJSONArray("prepositions")),
+            collocations = jsonArrayToStrings(obj.optJSONArray("collocations")),
             definition = obj.optString("definition", ""),
             derivatives = obj.optString("derivatives", ""),
             expressions = obj.optString("expressions", ""),
+            linguisticNotes = obj.optString("linguisticNotes", ""),
+            examples = jsonArrayToStrings(obj.optJSONArray("examples")),
+            personalHint = obj.optString("personalHint", ""),
             notes = obj.optString("notes", ""),
             importantNotes = obj.optString("importantNotes", ""),
+            difficulty = obj.optInt("difficulty", 0).coerceIn(0, 3),
+            studyTags = jsonArrayToStrings(obj.optJSONArray("studyTags")),
+            lastWrongAt = obj.optLong("lastWrongAt", 0L),
             isFavorite = obj.optBoolean("isFavorite", false),
             createdAt = obj.optLong("createdAt", System.currentTimeMillis()),
             updatedAt = obj.optLong("updatedAt", System.currentTimeMillis()),

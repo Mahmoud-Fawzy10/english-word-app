@@ -240,11 +240,28 @@ object DictionaryImporter {
             val pos = splitTags(col("pos"))
             val synonyms = splitTags(col("synonyms"))
             val antonyms = splitTags(col("antonyms"))
+            val prepositions = splitTags(col("prepositions"))
+            val collocations = splitTags(col("collocations"))
             val definition = col("definition")
             val derivatives = col("derivatives")
             val expressions = col("expressions")
+            val linguisticNotes = col("linguisticNotes")
+            val examples = col("examples")
+                .split("|", "\n")
+                .map { it.trim() }
+                .filter { it.isNotBlank() }
+                .distinct()
+            val personalHint = col("personalHint")
             val notes = col("notes")
             val importantNotes = col("importantNotes")
+            val studyTags = splitTags(col("studyTags"))
+            val diffRaw = col("difficulty")
+            val difficulty = when {
+                diffRaw.contains("صعب") || diffRaw == "3" -> 3
+                diffRaw.contains("متوسط") || diffRaw == "2" -> 2
+                diffRaw.contains("سهل") || diffRaw == "1" -> 1
+                else -> 0
+            }
             val favRaw = col("favorite").lowercase()
             val isFavorite = favRaw == "نعم" || favRaw == "yes" || favRaw == "true" || favRaw == "1"
 
@@ -273,11 +290,18 @@ object DictionaryImporter {
                 partsOfSpeech = pos,
                 synonyms = synonyms,
                 antonyms = antonyms,
+                prepositions = prepositions,
+                collocations = collocations,
                 definition = definition,
                 derivatives = derivatives,
                 expressions = expressions,
+                linguisticNotes = linguisticNotes,
+                examples = examples,
+                personalHint = personalHint,
                 notes = notes,
                 importantNotes = importantNotes,
+                studyTags = studyTags,
+                difficulty = difficulty,
                 isFavorite = isFavorite
             )
             if (entry.hasAnyContent()) entry else null
@@ -300,11 +324,18 @@ object DictionaryImporter {
                 h.contains("موقعها") || h.contains("الكلام") || h == "pos" || h.contains("part of speech") -> map.putIfAbsent("pos", idx)
                 h.contains("مرادف") || h.contains("synonym") -> map.putIfAbsent("synonyms", idx)
                 h.contains("مضاد") || h.contains("antonym") -> map.putIfAbsent("antonyms", idx)
+                h.contains("حروف الجر") || h.contains("preposition") -> map.putIfAbsent("prepositions", idx)
+                h.contains("متلازم") || h.contains("collocation") -> map.putIfAbsent("collocations", idx)
                 h.contains("تعريف") || h == "definition" -> map.putIfAbsent("definition", idx)
                 h.contains("اشتقاق") || h.contains("derivative") -> map.putIfAbsent("derivatives", idx)
                 h.contains("تعبيرات") || h.contains("expression") -> map.putIfAbsent("expressions", idx)
+                h.contains("لغوية") || h.contains("linguistic") -> map.putIfAbsent("linguisticNotes", idx)
+                h.contains("أمثلة") || h.contains("example") -> map.putIfAbsent("examples", idx)
+                h.contains("تلميح") || h.contains("hint") || h.contains("mnemonic") -> map.putIfAbsent("personalHint", idx)
                 h.contains("م&ملاحظات") || h.contains("هامة") || h.contains("important") -> map.putIfAbsent("importantNotes", idx)
                 h.contains("ملاحظات") || h == "notes" -> map.putIfAbsent("notes", idx)
+                h.contains("مجموعات") || h.contains("وسوم") || h == "tags" -> map.putIfAbsent("studyTags", idx)
+                h.contains("صعوبة") || h == "difficulty" -> map.putIfAbsent("difficulty", idx)
                 h.contains("مفضلة") || h.contains("favorite") -> map.putIfAbsent("favorite", idx)
             }
         }

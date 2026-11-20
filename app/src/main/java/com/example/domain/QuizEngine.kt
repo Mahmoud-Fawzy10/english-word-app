@@ -7,6 +7,8 @@ enum class QuizScopeMode(val labelAr: String, val descriptionAr: String) {
     BY_UNIT("حسب الوحدة", "اختبار على وحدة محددة أو نطاق من الوحدات"),
     BY_LESSON("حسب الدرس", "اختبار على درس محدد أو نطاق من الدروس"),
     BY_PAGE("حسب الصفحة", "اختبار على صفحة محددة أو نطاق من الصفحات"),
+    BY_STUDY_TAG("حسب المجموعة", "اختبار كلمات مجموعة دراسية محددة"),
+    HARD_AND_MISTAKES("الصعبة والأخطاء", "تركيز على الكلمات الصعبة والتي أخطأت بها مؤخراً"),
     RANDOM_RANGE("عشوائي حسب نطاق", "اختيار عشوائي ضمن النطاق والكتاب الذي تحدده")
 }
 
@@ -16,6 +18,9 @@ enum class QuizQuestionType(val labelAr: String) {
     TYPING("كتابة الكلمة / المعنى"),
     SYNONYMS("اختبار المرادفات"),
     ANTONYMS("اختبار المضادات"),
+    PREPOSITIONS_COLLOCATIONS("حروف الجر والمتلازمات"),
+    LETTER_SCRAMBLE("ترتيب الحروف (ميني-كويز)"),
+    MATCH_PAIRS("توصيل الأزواج (ميني-كويز)"),
     MIXED("اختبار شامل متنوع")
 }
 
@@ -27,14 +32,23 @@ enum class QuizDirection(val labelAr: String) {
 enum class QuestionInteractionKind {
     FLASHCARD,
     MCQ,
-    TYPING
+    TYPING,
+    SCRAMBLE,
+    MATCH_PAIRS
 }
+
+data class MatchPairItem(
+    val entry: WordEntry,
+    val leftText: String,
+    val rightText: String
+)
 
 data class QuizConfig(
     val scopeMode: QuizScopeMode = QuizScopeMode.SRS_DUE,
     val questionType: QuizQuestionType = QuizQuestionType.FLASHCARD_SRS,
     val direction: QuizDirection = QuizDirection.WORD_TO_MEANING,
     val selectedBook: String? = null,
+    val selectedStudyTag: String? = null,
     val unitFrom: String = "",
     val unitTo: String = "",
     val lessonFrom: String = "",
@@ -55,7 +69,9 @@ data class QuizQuestionItem(
     val answerText: String,
     val acceptedAnswers: List<String>,
     val hintText: String,
-    val options: List<String> = emptyList()
+    val options: List<String> = emptyList(),
+    val scrambleTiles: List<String> = emptyList(),
+    val matchPairs: List<MatchPairItem> = emptyList()
 )
 
 data class QuizAnswerRecord(
@@ -76,9 +92,13 @@ object QuizEngine {
             when (config.questionType) {
                 QuizQuestionType.FLASHCARD_SRS -> entry.hasAnyContent()
                 QuizQuestionType.MULTIPLE_CHOICE,
-                QuizQuestionType.TYPING -> entry.word.isNotBlank() && entry.arabicMeaning.isNotBlank()
+                QuizQuestionType.TYPING,
+                QuizQuestionType.MATCH_PAIRS -> entry.word.isNotBlank() && entry.arabicMeaning.isNotBlank()
+                QuizQuestionType.LETTER_SCRAMBLE -> entry.word.trim().length >= 3
                 QuizQuestionType.SYNONYMS -> entry.word.isNotBlank() && entry.synonyms.isNotEmpty()
                 QuizQuestionType.ANTONYMS -> entry.word.isNotBlank() && entry.antonyms.isNotEmpty()
+                QuizQuestionType.PREPOSITIONS_COLLOCATIONS ->
+                    entry.word.isNotBlank() && (entry.prepositions.isNotEmpty() || entry.collocations.isNotEmpty())
                 QuizQuestionType.MIXED -> {
                     (entry.word.isNotBlank() && entry.arabicMeaning.isNotBlank()) ||
                         (entry.word.isNotBlank() && entry.synonyms.isNotEmpty()) ||
@@ -94,6 +114,11 @@ object QuizEngine {
                 val bookMatch = entry.books.any { it.equals(config.selectedBook, ignoreCase = true) } ||
                     entry.locations.any { it.book.equals(config.selectedBook, ignoreCase = true) }
                 if (!bookMatch) return@filter false
+            }
+
+            if (!config.selectedStudyTag.isNullOrBlank()) {
+                val tagMatch = entry.studyTags.any { it.equals(config.selectedStudyTag, ignoreCase = true) }
+                if (!tagMatch) return@filter false
             }
 
             when (config.scopeMode) {
@@ -116,6 +141,11 @@ object QuizEngine {
                     to = config.pageTo,
                     selector = { it.page }
                 )
+                QuizScopeMode.BY_STUDY_TAG -> {
+                    config.selectedStudyTag.isNullOrBlank() ||
+                        entry.studyTags.any { it.equals(config.selectedStudyTag, ignoreCase = true) }
+                }
+                QuizScopeMode.HARD_AND_MISTAKES -> entry.isHardOrMistake()
                 QuizScopeMode.RANDOM_RANGE -> {
                     matchesFieldRange(entry, config.unitFrom, config.unitTo) { it.unit } &&
                         matchesFieldRange(entry, config.lessonFrom, config.lessonTo) { it.lesson } &&
@@ -144,6 +174,10 @@ object QuizEngine {
         allWordsPool: List<WordEntry>,
         config: QuizConfig
     ): List<QuizQuestionItem> {
+        if (config.questionType == QuizQuestionType.MATCH_PAIRS) {
+            return buildMatchPairsRounds(selectedWords)
+        }
+
         return selectedWords.mapIndexed { index, entry ->
             val effectiveType = when (config.questionType) {
                 QuizQuestionType.MIXED -> pickMixedTypeFor(entry, index)
@@ -156,9 +190,98 @@ object QuizEngine {
                 QuizQuestionType.TYPING -> buildMeaningTypingQuestion(entry, config)
                 QuizQuestionType.SYNONYMS -> buildSynonymQuestion(entry, allWordsPool)
                 QuizQuestionType.ANTONYMS -> buildAntonymQuestion(entry, allWordsPool)
+                QuizQuestionType.PREPOSITIONS_COLLOCATIONS -> buildPrepCollocationQuestion(entry, allWordsPool)
+                QuizQuestionType.LETTER_SCRAMBLE -> buildScrambleQuestion(entry)
+                QuizQuestionType.MATCH_PAIRS -> buildMeaningMcqQuestion(entry, allWordsPool, config)
                 QuizQuestionType.MIXED -> buildMeaningMcqQuestion(entry, allWordsPool, config)
             }
         }
+    }
+
+    private fun buildMatchPairsRounds(selectedWords: List<WordEntry>): List<QuizQuestionItem> {
+        val valid = selectedWords.filter { it.word.isNotBlank() && it.arabicMeaning.isNotBlank() }
+        if (valid.isEmpty()) return emptyList()
+        return valid.chunked(5).mapIndexed { roundIdx, chunk ->
+            val pairs = chunk.map { entry ->
+                MatchPairItem(
+                    entry = entry,
+                    leftText = entry.word.trim(),
+                    rightText = entry.arabicMeaning.trim()
+                )
+            }
+            QuizQuestionItem(
+                entry = chunk.first(),
+                interactionKind = QuestionInteractionKind.MATCH_PAIRS,
+                badgeLabel = "توصيل الأزواج — جولة ${roundIdx + 1}",
+                promptText = "صل كل كلمة إنجليزية بمعناها العربي الصحيح",
+                answerText = pairs.joinToString(" • ") { "${it.leftText} = ${it.rightText}" },
+                acceptedAnswers = pairs.map { it.leftText },
+                hintText = "${pairs.size} أزواج للتوصيل",
+                matchPairs = pairs
+            )
+        }
+    }
+
+    private fun buildScrambleQuestion(entry: WordEntry): QuizQuestionItem {
+        val target = entry.word.trim()
+        val chars = target.map { it.toString() }
+        var shuffled = chars.shuffled()
+        if (shuffled == chars && chars.size > 1) {
+            shuffled = chars.reversed()
+        }
+        val meaningHint = entry.arabicMeaning.ifBlank { entry.definition.ifBlank { "رتب الحروف لتكوين الكلمة" } }
+        return QuizQuestionItem(
+            entry = entry,
+            interactionKind = QuestionInteractionKind.SCRAMBLE,
+            badgeLabel = "ميني-كويز: ترتيب الحروف",
+            promptText = meaningHint,
+            answerText = target,
+            acceptedAnswers = listOf(target),
+            hintText = buildHint(entry, includeIpa = false),
+            scrambleTiles = shuffled
+        )
+    }
+
+    private fun buildPrepCollocationQuestion(entry: WordEntry, allWordsPool: List<WordEntry>): QuizQuestionItem {
+        val validPreps = entry.prepositions.map { it.trim() }.filter { it.isNotBlank() }
+        val validCols = entry.collocations.map { it.trim() }.filter { it.isNotBlank() }
+        val usePreps = validPreps.isNotEmpty()
+        val targets = if (usePreps) validPreps else validCols
+        val primary = targets.firstOrNull().orEmpty()
+        val prompt = if (usePreps) {
+            "ما حرف الجر المستخدم مع «${entry.word}» (${entry.arabicMeaning})؟"
+        } else {
+            "ما المتلازمة اللفظية (Collocation) مع «${entry.word}» (${entry.arabicMeaning})؟"
+        }
+        val distractors = allWordsPool
+            .asSequence()
+            .filter { it.id != entry.id }
+            .flatMap { cand ->
+                (if (usePreps) cand.prepositions else cand.collocations).asSequence()
+            }
+            .map { it.trim() }
+            .filter { cand -> cand.isNotBlank() && targets.none { it.equals(cand, ignoreCase = true) } }
+            .distinct()
+            .shuffled()
+            .take(3)
+            .toList()
+
+        val options = if (distractors.isNotEmpty() && primary.isNotBlank()) {
+            (distractors + primary).distinct().shuffled()
+        } else {
+            emptyList()
+        }
+
+        return QuizQuestionItem(
+            entry = entry,
+            interactionKind = if (options.size >= 2) QuestionInteractionKind.MCQ else QuestionInteractionKind.TYPING,
+            badgeLabel = if (usePreps) "اختبار حروف الجر" else "اختبار المتلازمات اللفظية",
+            promptText = prompt,
+            answerText = targets.joinToString(" / "),
+            acceptedAnswers = targets,
+            hintText = buildHint(entry, includeIpa = true),
+            options = options
+        )
     }
 
     private fun pickMixedTypeFor(entry: WordEntry, index: Int): QuizQuestionType {
@@ -166,12 +289,16 @@ object QuizEngine {
             if (entry.word.isNotBlank() && entry.arabicMeaning.isNotBlank()) {
                 add(QuizQuestionType.MULTIPLE_CHOICE)
                 add(QuizQuestionType.TYPING)
+                if (entry.word.trim().length >= 4) add(QuizQuestionType.LETTER_SCRAMBLE)
             }
             if (entry.word.isNotBlank() && entry.synonyms.isNotEmpty()) {
                 add(QuizQuestionType.SYNONYMS)
             }
             if (entry.word.isNotBlank() && entry.antonyms.isNotEmpty()) {
                 add(QuizQuestionType.ANTONYMS)
+            }
+            if (entry.word.isNotBlank() && (entry.prepositions.isNotEmpty() || entry.collocations.isNotEmpty())) {
+                add(QuizQuestionType.PREPOSITIONS_COLLOCATIONS)
             }
         }
         return if (candidates.isEmpty()) QuizQuestionType.FLASHCARD_SRS else candidates[index % candidates.size]

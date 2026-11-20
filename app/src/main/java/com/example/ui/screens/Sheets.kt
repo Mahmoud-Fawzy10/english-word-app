@@ -18,8 +18,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.CheckCircle
-import androidx.compose.material.icons.rounded.Description
 import androidx.compose.material.icons.rounded.Download
+import androidx.compose.material.icons.rounded.FolderZip
 import androidx.compose.material.icons.rounded.PictureAsPdf
 import androidx.compose.material.icons.rounded.RadioButtonUnchecked
 import androidx.compose.material.icons.rounded.RestartAlt
@@ -56,16 +56,18 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.data.model.AdvancedSearchFilter
 import com.example.data.model.SortOption
+import com.example.data.model.WordDifficulty
 import com.example.export.ExportFormat
 import com.example.ui.components.MultiSelectPillGroup
 import com.example.ui.components.RoundedBlueTextField
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun AdvancedSearchSheet(
     currentFilter: AdvancedSearchFilter,
     availableBooks: List<String>,
     availablePartsOfSpeech: List<String>,
+    availableStudyTags: List<String> = emptyList(),
     onApply: (AdvancedSearchFilter) -> Unit,
     onReset: () -> Unit,
     onDismiss: () -> Unit
@@ -84,7 +86,7 @@ fun AdvancedSearchSheet(
                 .fillMaxWidth()
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = 20.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp)
+            verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -92,7 +94,7 @@ fun AdvancedSearchSheet(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "بحث متقدم",
+                    text = "بحث متقدم متعدد المعايير",
                     style = MaterialTheme.typography.headlineSmall,
                     color = MaterialTheme.colorScheme.primary
                 )
@@ -175,6 +177,33 @@ fun AdvancedSearchSheet(
                 singleLine = true
             )
 
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                RoundedBlueTextField(
+                    value = draft.prepositionsQuery,
+                    onValueChange = { draft = draft.copy(prepositionsQuery = it) },
+                    label = "حروف الجر",
+                    singleLine = true,
+                    modifier = Modifier.weight(1f)
+                )
+                RoundedBlueTextField(
+                    value = draft.collocationsQuery,
+                    onValueChange = { draft = draft.copy(collocationsQuery = it) },
+                    label = "المتلازمات",
+                    singleLine = true,
+                    modifier = Modifier.weight(1f)
+                )
+            }
+
+            RoundedBlueTextField(
+                value = draft.linguisticNotesQuery,
+                onValueChange = { draft = draft.copy(linguisticNotesQuery = it) },
+                label = "في الملاحظات والملاحظات اللغوية",
+                singleLine = true
+            )
+
             Text(
                 text = "موقعها من الكلام",
                 style = MaterialTheme.typography.titleSmall,
@@ -190,44 +219,76 @@ fun AdvancedSearchSheet(
                 }
             )
 
+            if (availableStudyTags.isNotEmpty()) {
+                Text(
+                    text = "المجموعات الدراسية",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                MultiSelectPillGroup(
+                    options = availableStudyTags,
+                    selectedOptions = draft.selectedStudyTags,
+                    onToggle = { tag ->
+                        val next = draft.selectedStudyTags.toMutableSet()
+                        if (!next.add(tag)) next.remove(tag)
+                        draft = draft.copy(selectedStudyTags = next)
+                    }
+                )
+            }
+
+            Text(
+                text = "مستوى الصعوبة",
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                WordDifficulty.entries.forEach { diff ->
+                    val selected = draft.selectedDifficulties.contains(diff.level)
+                    FilterChip(
+                        selected = selected,
+                        onClick = {
+                            val next = draft.selectedDifficulties.toMutableSet()
+                            if (!next.add(diff.level)) next.remove(diff.level)
+                            draft = draft.copy(selectedDifficulties = next)
+                        },
+                        label = { Text(diff.labelAr) },
+                        shape = RoundedCornerShape(50),
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = MaterialTheme.colorScheme.primary,
+                            selectedLabelColor = MaterialTheme.colorScheme.onPrimary
+                        )
+                    )
+                }
+            }
+
             Surface(
                 shape = RoundedCornerShape(22.dp),
                 color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
             ) {
                 Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text("المفضلة فقط", style = MaterialTheme.typography.bodyLarge)
-                        Switch(
-                            checked = draft.favoritesOnly,
-                            onCheckedChange = { draft = draft.copy(favoritesOnly = it) }
-                        )
-                    }
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text("تحتوي على ملاحظات فقط", style = MaterialTheme.typography.bodyLarge)
-                        Switch(
-                            checked = draft.hasNotesOnly,
-                            onCheckedChange = { draft = draft.copy(hasNotesOnly = it) }
-                        )
-                    }
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text("تحتوي على تعبيرات لغوية فقط", style = MaterialTheme.typography.bodyLarge)
-                        Switch(
-                            checked = draft.hasExpressionsOnly,
-                            onCheckedChange = { draft = draft.copy(hasExpressionsOnly = it) }
-                        )
-                    }
+                    FilterSwitchRow(
+                        label = "المفضلة فقط",
+                        checked = draft.favoritesOnly,
+                        onCheckedChange = { draft = draft.copy(favoritesOnly = it) }
+                    )
+                    FilterSwitchRow(
+                        label = "تحتوي على ملاحظات أو فروق لغوية",
+                        checked = draft.hasNotesOnly,
+                        onCheckedChange = { draft = draft.copy(hasNotesOnly = it) }
+                    )
+                    FilterSwitchRow(
+                        label = "تحتوي على تعبيرات أو أمثلة",
+                        checked = draft.hasExpressionsOnly,
+                        onCheckedChange = { draft = draft.copy(hasExpressionsOnly = it) }
+                    )
+                    FilterSwitchRow(
+                        label = "الكلمات الصعبة والأخطاء فقط",
+                        checked = draft.hardOrMistakesOnly,
+                        onCheckedChange = { draft = draft.copy(hardOrMistakesOnly = it) }
+                    )
                 }
             }
 
@@ -249,6 +310,22 @@ fun AdvancedSearchSheet(
     }
 }
 
+@Composable
+private fun FilterSwitchRow(
+    label: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(label, style = MaterialTheme.typography.bodyLarge)
+        Switch(checked = checked, onCheckedChange = onCheckedChange)
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SortOptionsSheet(
@@ -266,6 +343,7 @@ fun SortOptionsSheet(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
                 .padding(horizontal = 20.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
@@ -283,7 +361,8 @@ fun SortOptionsSheet(
                         .clickable {
                             onSelect(option)
                             onDismiss()
-                        },
+                        }
+                        .testTag("sort_option_${option.name.lowercase()}"),
                     shape = RoundedCornerShape(20.dp),
                     color = if (selected) {
                         MaterialTheme.colorScheme.primaryContainer
@@ -345,16 +424,16 @@ fun ExportSheet(
                 .fillMaxWidth()
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = 20.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp)
+            verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             Text(
-                text = "تصدير القاموس (بدون نت)",
+                text = "تصدير القاموس (100% بدون نت)",
                 style = MaterialTheme.typography.headlineSmall,
                 color = MaterialTheme.colorScheme.primary
             )
             Text(
-                text = "يتم إنشاء الملفات محلياً على جهازك بالكامل بدون اتصال بالإنترنت.",
-                style = MaterialTheme.typography.bodyMedium,
+                text = "تصدير Excel و Google Sheets يتضمن الورقة الأساسية «قاموسي» + 9 أوراق متخصصة تلقائياً (المرادفات، المضادات، التعريفات، الاشتقاقات، الملاحظات اللغوية، حروف الجر، المتلازمات اللفظية، التعبيرات والأمثلة، فهرس المنهج).",
+                style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
 
@@ -392,13 +471,6 @@ fun ExportSheet(
             }
 
             ExportOptionCard(
-                icon = Icons.Rounded.PictureAsPdf,
-                format = ExportFormat.PDF,
-                enabled = !isExporting,
-                onSave = { onSaveToDevice(ExportFormat.PDF, exportFilteredOnly) },
-                onShare = { onShareExport(ExportFormat.PDF, exportFilteredOnly) }
-            )
-            ExportOptionCard(
                 icon = Icons.Rounded.TableChart,
                 format = ExportFormat.EXCEL,
                 enabled = !isExporting,
@@ -406,11 +478,25 @@ fun ExportSheet(
                 onShare = { onShareExport(ExportFormat.EXCEL, exportFilteredOnly) }
             )
             ExportOptionCard(
+                icon = Icons.Rounded.FolderZip,
+                format = ExportFormat.GOOGLE_SHEETS_BUNDLE,
+                enabled = !isExporting,
+                onSave = { onSaveToDevice(ExportFormat.GOOGLE_SHEETS_BUNDLE, exportFilteredOnly) },
+                onShare = { onShareExport(ExportFormat.GOOGLE_SHEETS_BUNDLE, exportFilteredOnly) }
+            )
+            ExportOptionCard(
                 icon = Icons.Rounded.TableView,
                 format = ExportFormat.GOOGLE_SHEETS,
                 enabled = !isExporting,
                 onSave = { onSaveToDevice(ExportFormat.GOOGLE_SHEETS, exportFilteredOnly) },
                 onShare = { onShareExport(ExportFormat.GOOGLE_SHEETS, exportFilteredOnly) }
+            )
+            ExportOptionCard(
+                icon = Icons.Rounded.PictureAsPdf,
+                format = ExportFormat.PDF,
+                enabled = !isExporting,
+                onSave = { onSaveToDevice(ExportFormat.PDF, exportFilteredOnly) },
+                onShare = { onShareExport(ExportFormat.PDF, exportFilteredOnly) }
             )
 
             Spacer(modifier = Modifier.height(16.dp))
@@ -548,7 +634,7 @@ fun JsonRestoreModeDialog(
                             fontWeight = FontWeight.Bold
                         )
                         Text(
-                            text = "يضيف الكلمات الجديدة ويدمج المواقع والمرادفات دون حذف كلماتك الحالية.",
+                            text = "يضيف الكلمات الجديدة ويدمج المواقع والمرادفات دون تكرار أو حذف.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onPrimaryContainer
                         )
@@ -575,7 +661,7 @@ fun JsonRestoreModeDialog(
                             fontWeight = FontWeight.Bold
                         )
                         Text(
-                            text = "يمسح الكلمات الحالية ويستعيد النسخة الاحتياطية وتقدم SRS كما هو تماماً.",
+                            text = "يمسح الكلمات الحالية ويستعيد النسخة الاحتياطية وتقدم SRS كما هو.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurface
                         )

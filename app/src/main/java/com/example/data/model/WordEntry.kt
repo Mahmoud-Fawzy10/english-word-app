@@ -30,7 +30,16 @@ data class WordEntry(
     val srsNextReviewAt: Long = 0L,
     val srsLastReviewedAt: Long = 0L,
     val srsTotalReviews: Int = 0,
-    val srsCorrectCount: Int = 0
+    val srsCorrectCount: Int = 0,
+    // v4 Extended Study & Linguistic Fields (all optional)
+    val prepositions: List<String> = emptyList(),
+    val collocations: List<String> = emptyList(),
+    val linguisticNotes: String = "",
+    val examples: List<String> = emptyList(),
+    val personalHint: String = "",
+    val difficulty: Int = 0, // 0 = عادي, 1 = سهل, 2 = متوسط, 3 = صعب
+    val studyTags: List<String> = emptyList(),
+    val lastWrongAt: Long = 0L
 ) {
     fun displayTitle(): String = when {
         word.isNotBlank() -> word
@@ -52,7 +61,13 @@ data class WordEntry(
             derivatives.isNotBlank() ||
             expressions.isNotBlank() ||
             notes.isNotBlank() ||
-            importantNotes.isNotBlank()
+            importantNotes.isNotBlank() ||
+            prepositions.isNotEmpty() ||
+            collocations.isNotEmpty() ||
+            linguisticNotes.isNotBlank() ||
+            examples.isNotEmpty() ||
+            personalHint.isNotBlank() ||
+            studyTags.isNotEmpty()
 
     fun isDueForReview(nowMillis: Long = System.currentTimeMillis()): Boolean {
         if (!hasAnyContent()) return false
@@ -60,6 +75,15 @@ data class WordEntry(
     }
 
     fun isNewForSrs(): Boolean = srsTotalReviews == 0 && srsNextReviewAt == 0L
+
+    fun isHardOrMistake(): Boolean = difficulty >= 3 || lastWrongAt > 0L
+
+    fun difficultyLabelAr(): String = when (difficulty) {
+        1 -> "سهل"
+        2 -> "متوسط"
+        3 -> "صعب"
+        else -> "عادي"
+    }
 
     fun firstUnitNumberOrNull(): Int? =
         locations.firstNotNullOfOrNull { extractFirstInt(it.unit) }

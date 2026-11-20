@@ -35,6 +35,9 @@ interface WordDao {
     @Query("DELETE FROM word_entries WHERE id = :id")
     suspend fun deleteWordById(id: Long)
 
+    @Query("DELETE FROM word_entries WHERE id IN (:ids)")
+    suspend fun deleteWordsByIds(ids: List<Long>)
+
     @Query("DELETE FROM word_entries")
     suspend fun deleteAllWords()
 
@@ -49,6 +52,15 @@ interface WordDao {
     @Query("UPDATE word_entries SET isFavorite = :isFavorite, updatedAt = :updatedAt WHERE id = :id")
     suspend fun setFavorite(id: Long, isFavorite: Boolean, updatedAt: Long)
 
+    @Query("UPDATE word_entries SET isFavorite = :isFavorite, updatedAt = :updatedAt WHERE id IN (:ids)")
+    suspend fun setFavoriteBatch(ids: List<Long>, isFavorite: Boolean, updatedAt: Long)
+
+    @Query("UPDATE word_entries SET difficulty = :difficulty, updatedAt = :updatedAt WHERE id IN (:ids)")
+    suspend fun setDifficultyBatch(ids: List<Long>, difficulty: Int, updatedAt: Long)
+
+    @Query("UPDATE word_entries SET lastWrongAt = :lastWrongAt, updatedAt = :updatedAt WHERE id = :id")
+    suspend fun setLastWrongAt(id: Long, lastWrongAt: Long, updatedAt: Long)
+
     @Query(
         """
         UPDATE word_entries
@@ -59,6 +71,7 @@ interface WordDao {
             srsLastReviewedAt = :lastReviewedAt,
             srsTotalReviews = :totalReviews,
             srsCorrectCount = :correctCount,
+            lastWrongAt = :lastWrongAt,
             updatedAt = :updatedAt
         WHERE id = :id
         """
@@ -72,6 +85,7 @@ interface WordDao {
         lastReviewedAt: Long,
         totalReviews: Int,
         correctCount: Int,
+        lastWrongAt: Long,
         updatedAt: Long
     )
 }

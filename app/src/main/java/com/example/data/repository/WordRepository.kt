@@ -1,11 +1,14 @@
 package com.example.data.repository
 
 import com.example.data.local.WordDao
+import com.example.data.local.WordRevisionDao
 import com.example.data.model.DuplicatePolicy
 import com.example.data.model.WordEntry
+import com.example.data.model.WordRevision
 import com.example.domain.SrsGrade
 import com.example.domain.SrsScheduler
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flowOf
 
 data class ImportSummary(
     val insertedCount: Int = 0,
@@ -13,7 +16,17 @@ data class ImportSummary(
     val skippedCount: Int = 0
 )
 
-class WordRepository(private val wordDao: WordDao) {
+sealed interface SaveWordResult {
+    data class Saved(val id: Long) : SaveWordResult
+    data class Merged(val id: Long) : SaveWordResult
+    data class DuplicateRejected(val existing: WordEntry) : SaveWordResult
+    data object EmptyRejected : SaveWordResult
+}
+
+class WordRepository(
+    private val wordDao: WordDao,
+    private val revisionDao: WordRevisionDao? = null
+) {
 
     val allWords: Flow<List<WordEntry>> = wordDao.getAllWords()
 
@@ -23,18 +36,88 @@ class WordRepository(private val wordDao: WordDao) {
 
     suspend fun getWordOnce(id: Long): WordEntry? = wordDao.getWordByIdOnce(id)
 
-    suspend fun saveWord(entry: WordEntry): Long {
+    /**
+     * Strict anti-duplication save:
+     * Refuses to insert or update an entry if another word with the same normalized key exists,
+     * unless [mergeTarget] is explicitly provided.
+     */
+    suspend fun saveWordChecked(
+        entry: WordEntry,
+        mergeTarget: WordEntry? = null
+    ): SaveWordResult {
+        if (!entry.hasAnyContent()) return SaveWordResult.EmptyRejected
+
+        if (mergeTarget != null) {
+            val merged = mergeEntries(mergeTarget, entry)
+            if (entry.id > 0L && entry.id != mergeTarget.id) {
+                wordDao.deleteWordById(entry.id)
+            }
+            return SaveWordResult.Merged(merged.id)
+        }
+
+        val duplicates = findDuplicatesFor(
+            word = entry.word,
+            arabicMeaning = entry.arabicMeaning,
+            excludeId = entry.id
+        )
+        if (duplicates.isNotEmpty()) {
+            return SaveWordResult.DuplicateRejected(duplicates.first())
+        }
+
         val now = System.currentTimeMillis()
-        return if (entry.id == 0L) {
+        val id = if (entry.id == 0L) {
             wordDao.insertWord(entry.copy(createdAt = now, updatedAt = now))
         } else {
+            saveRevisionSnapshotIfChanged(entry.id, summaryAr = "تعديل الكلمة")
             wordDao.updateWord(entry.copy(updatedAt = now))
             entry.id
         }
+        return SaveWordResult.Saved(id)
+    }
+
+    /**
+     * Legacy helper delegating to strict saveWordChecked; throws or returns -1L if rejected as duplicate.
+     */
+    suspend fun saveWord(entry: WordEntry): Long {
+        return when (val res = saveWordChecked(entry)) {
+            is SaveWordResult.Saved -> res.id
+            is SaveWordResult.Merged -> res.id
+            is SaveWordResult.DuplicateRejected -> -1L
+            SaveWordResult.EmptyRejected -> -1L
+        }
+    }
+
+    fun observeRevisions(wordId: Long): Flow<List<WordRevision>> {
+        return revisionDao?.observeRevisionsForWord(wordId) ?: flowOf(emptyList())
+    }
+
+    suspend fun restoreRevision(revisionId: Long): WordEntry? {
+        val dao = revisionDao ?: return null
+        val rev = dao.getRevisionById(revisionId) ?: return null
+        val current = wordDao.getWordByIdOnce(rev.wordId) ?: return null
+        saveRevisionSnapshotIfChanged(current.id, summaryAr = "قبل استعادة نسخة سابقة")
+        val restored = WordRevision.applySnapshotTo(current, rev)
+        wordDao.updateWord(restored)
+        return restored
+    }
+
+    private suspend fun saveRevisionSnapshotIfChanged(wordId: Long, summaryAr: String) {
+        val dao = revisionDao ?: return
+        val before = wordDao.getWordByIdOnce(wordId) ?: return
+        dao.insertRevision(WordRevision.fromWordEntry(before, summaryAr))
+        dao.pruneRevisionsForWord(wordId, keepCount = 10)
     }
 
     suspend fun deleteWord(id: Long) {
         wordDao.deleteWordById(id)
+        revisionDao?.deleteRevisionsForWord(id)
+    }
+
+    suspend fun deleteWordsBatch(ids: List<Long>) {
+        if (ids.isNotEmpty()) {
+            wordDao.deleteWordsByIds(ids)
+            ids.forEach { revisionDao?.deleteRevisionsForWord(it) }
+        }
     }
 
     suspend fun toggleFavorite(id: Long, currentFavorite: Boolean) {
@@ -45,9 +128,39 @@ class WordRepository(private val wordDao: WordDao) {
         )
     }
 
+    suspend fun setFavoriteBatch(ids: List<Long>, isFavorite: Boolean) {
+        if (ids.isNotEmpty()) {
+            wordDao.setFavoriteBatch(ids, isFavorite, System.currentTimeMillis())
+        }
+    }
+
+    suspend fun setDifficultyBatch(ids: List<Long>, difficulty: Int) {
+        if (ids.isNotEmpty()) {
+            wordDao.setDifficultyBatch(ids, difficulty.coerceIn(0, 3), System.currentTimeMillis())
+        }
+    }
+
+    suspend fun addStudyTagBatch(ids: List<Long>, tag: String) {
+        val cleanTag = tag.trim()
+        if (ids.isEmpty() || cleanTag.isEmpty()) return
+        val now = System.currentTimeMillis()
+        val all = wordDao.getAllWordsOnce()
+        all.filter { ids.contains(it.id) }.forEach { entry ->
+            if (entry.studyTags.none { it.equals(cleanTag, ignoreCase = true) }) {
+                wordDao.updateWord(
+                    entry.copy(
+                        studyTags = (entry.studyTags + cleanTag).distinct(),
+                        updatedAt = now
+                    )
+                )
+            }
+        }
+    }
+
     suspend fun recordSrsReview(entry: WordEntry, grade: SrsGrade, nowMillis: Long = System.currentTimeMillis()) {
         val result = SrsScheduler.scheduleNext(entry, grade, nowMillis)
         val wasCorrect = grade != SrsGrade.AGAIN
+        val newWrongAt = if (!wasCorrect) nowMillis else 0L
         wordDao.updateSrsStats(
             id = entry.id,
             repetitions = result.repetitions,
@@ -57,6 +170,7 @@ class WordRepository(private val wordDao: WordDao) {
             lastReviewedAt = nowMillis,
             totalReviews = entry.srsTotalReviews + 1,
             correctCount = entry.srsCorrectCount + if (wasCorrect) 1 else 0,
+            lastWrongAt = newWrongAt,
             updatedAt = nowMillis
         )
     }
@@ -80,12 +194,13 @@ class WordRepository(private val wordDao: WordDao) {
             lastReviewedAt = if (resetProgress) 0L else entry.srsLastReviewedAt,
             totalReviews = if (resetProgress) 0 else entry.srsTotalReviews,
             correctCount = if (resetProgress) 0 else entry.srsCorrectCount,
+            lastWrongAt = if (resetProgress) 0L else entry.lastWrongAt,
             updatedAt = nowMillis
         )
     }
 
     // -------------------------------------------------------------------------
-    // Duplicate Detection, Merge & Offline Import/Restore
+    // Duplicate Detection, Merge & Offline Import/Restore (Zero Duplicates)
     // -------------------------------------------------------------------------
     suspend fun findDuplicatesFor(
         word: String,
@@ -117,6 +232,7 @@ class WordRepository(private val wordDao: WordDao) {
     }
 
     suspend fun mergeEntries(existing: WordEntry, incoming: WordEntry): WordEntry {
+        saveRevisionSnapshotIfChanged(existing.id, summaryAr = "دمج مع إدخال مطابق")
         val now = System.currentTimeMillis()
         val merged = existing.copy(
             word = existing.word.ifBlank { incoming.word.trim() },
@@ -127,11 +243,18 @@ class WordRepository(private val wordDao: WordDao) {
             partsOfSpeech = (existing.partsOfSpeech + incoming.partsOfSpeech).map { it.trim() }.filter { it.isNotBlank() }.distinct(),
             synonyms = (existing.synonyms + incoming.synonyms).map { it.trim() }.filter { it.isNotBlank() }.distinct(),
             antonyms = (existing.antonyms + incoming.antonyms).map { it.trim() }.filter { it.isNotBlank() }.distinct(),
+            prepositions = (existing.prepositions + incoming.prepositions).map { it.trim() }.filter { it.isNotBlank() }.distinct(),
+            collocations = (existing.collocations + incoming.collocations).map { it.trim() }.filter { it.isNotBlank() }.distinct(),
             definition = combineTextField(existing.definition, incoming.definition, "\n"),
             derivatives = combineTextField(existing.derivatives, incoming.derivatives, "\n"),
             expressions = combineTextField(existing.expressions, incoming.expressions, "\n"),
+            linguisticNotes = combineTextField(existing.linguisticNotes, incoming.linguisticNotes, "\n"),
+            examples = (existing.examples + incoming.examples).map { it.trim() }.filter { it.isNotBlank() }.distinct(),
+            personalHint = combineTextField(existing.personalHint, incoming.personalHint, "\n"),
             notes = combineTextField(existing.notes, incoming.notes, "\n"),
             importantNotes = combineTextField(existing.importantNotes, incoming.importantNotes, "\n"),
+            difficulty = maxOf(existing.difficulty, incoming.difficulty),
+            studyTags = (existing.studyTags + incoming.studyTags).map { it.trim() }.filter { it.isNotBlank() }.distinct(),
             isFavorite = existing.isFavorite || incoming.isFavorite,
             updatedAt = now
         )
@@ -179,7 +302,7 @@ class WordRepository(private val wordDao: WordDao) {
                     (normWord.isEmpty() && normMeaning.isNotEmpty() && exM == normMeaning)
             }
 
-            if (match == null || policy == DuplicatePolicy.KEEP_BOTH) {
+            if (match == null) {
                 toInsert.add(clean)
                 existingList.add(clean)
                 inserted++
@@ -187,12 +310,30 @@ class WordRepository(private val wordDao: WordDao) {
                 when (policy) {
                     DuplicatePolicy.SKIP -> skipped++
                     DuplicatePolicy.MERGE -> {
-                        val updated = mergeEntries(match, clean)
-                        val idx = existingList.indexOfFirst { it.id == match.id }
-                        if (idx >= 0) existingList[idx] = updated
+                        if (match.id > 0L) {
+                            val updated = mergeEntries(match, clean)
+                            val idx = existingList.indexOfFirst { it.id == match.id }
+                            if (idx >= 0) existingList[idx] = updated
+                        } else {
+                            // Matched a newly queued word in the same batch before DB insert
+                            val idx = toInsert.indexOfFirst {
+                                normalizeKey(it.word) == normWord && normWord.isNotEmpty() ||
+                                    (normWord.isEmpty() && normalizeKey(it.arabicMeaning) == normMeaning)
+                            }
+                            if (idx >= 0) {
+                                val prev = toInsert[idx]
+                                toInsert[idx] = prev.copy(
+                                    arabicMeaning = combineTextField(prev.arabicMeaning, clean.arabicMeaning, "، "),
+                                    synonyms = (prev.synonyms + clean.synonyms).distinct(),
+                                    antonyms = (prev.antonyms + clean.antonyms).distinct(),
+                                    prepositions = (prev.prepositions + clean.prepositions).distinct(),
+                                    collocations = (prev.collocations + clean.collocations).distinct(),
+                                    locations = (prev.locations + clean.locations).distinct()
+                                )
+                            }
+                        }
                         merged++
                     }
-                    DuplicatePolicy.KEEP_BOTH -> Unit
                 }
             }
         }
@@ -208,11 +349,47 @@ class WordRepository(private val wordDao: WordDao) {
         replaceExisting: Boolean
     ): ImportSummary {
         if (replaceExisting) {
-            val cleaned = backupWords.filter { it.hasAnyContent() }.map { it.copy(id = 0L) }
-            wordDao.replaceAllWords(cleaned)
-            return ImportSummary(insertedCount = cleaned.size)
+            val deduplicated = mutableListOf<WordEntry>()
+            val seen = mutableSetOf<String>()
+            backupWords.filter { it.hasAnyContent() }.forEach { w ->
+                val key = normalizeKey(w.word).ifEmpty { "m:${normalizeKey(w.arabicMeaning)}" }
+                if (seen.add(key)) {
+                    deduplicated.add(w.copy(id = 0L))
+                }
+            }
+            wordDao.replaceAllWords(deduplicated)
+            return ImportSummary(insertedCount = deduplicated.size)
         }
         return importWords(backupWords, DuplicatePolicy.MERGE)
+    }
+
+    fun findRelatedWords(target: WordEntry, allWords: List<WordEntry>, limit: Int = 8): List<WordEntry> {
+        val targetWordNorm = normalizeKey(target.word)
+        val targetSyns = target.synonyms.map { normalizeKey(it) }.filter { it.isNotEmpty() }.toSet()
+        val targetAnts = target.antonyms.map { normalizeKey(it) }.filter { it.isNotEmpty() }.toSet()
+        val targetUnits = target.locations.map { normalizeKey(it.unit) }.filter { it.isNotEmpty() }.toSet()
+
+        return allWords
+            .asSequence()
+            .filter { it.id != target.id }
+            .mapNotNull { candidate ->
+                val candNorm = normalizeKey(candidate.word)
+                val candSyns = candidate.synonyms.map { normalizeKey(it) }.toSet()
+                val candAnts = candidate.antonyms.map { normalizeKey(it) }.toSet()
+                val candUnits = candidate.locations.map { normalizeKey(it.unit) }.toSet()
+
+                var score = 0
+                if (targetSyns.contains(candNorm) || candSyns.contains(targetWordNorm)) score += 5
+                if (targetAnts.contains(candNorm) || candAnts.contains(targetWordNorm)) score += 5
+                if (targetSyns.intersect(candSyns).isNotEmpty()) score += 3
+                if (targetAnts.intersect(candAnts).isNotEmpty()) score += 3
+                if (targetUnits.intersect(candUnits).isNotEmpty()) score += 1
+                if (score > 0) candidate to score else null
+            }
+            .sortedByDescending { it.second }
+            .take(limit)
+            .map { it.first }
+            .toList()
     }
 
     private fun combineTextField(existing: String, incoming: String, separator: String): String {

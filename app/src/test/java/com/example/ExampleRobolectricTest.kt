@@ -8,12 +8,15 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 import androidx.sqlite.db.SupportSQLiteOpenHelper
 import androidx.sqlite.db.framework.FrameworkSQLiteOpenHelperFactory
 import androidx.test.core.app.ApplicationProvider
+import com.example.data.local.AppPreferences
 import com.example.data.local.QamusiDatabase
 import com.example.data.local.WordTypeConverters
 import com.example.data.model.DuplicatePolicy
 import com.example.data.model.WordEntry
 import com.example.data.model.WordLocation
+import com.example.data.repository.SaveWordResult
 import com.example.data.repository.WordRepository
+import com.example.domain.LearningAnalyticsEngine
 import com.example.domain.QuestionInteractionKind
 import com.example.domain.QuizConfig
 import com.example.domain.QuizEngine
@@ -22,12 +25,14 @@ import com.example.domain.QuizScopeMode
 import com.example.domain.SrsGrade
 import com.example.domain.SrsMaturity
 import com.example.domain.SrsScheduler
+import com.example.domain.StudyMapBuilder
 import com.example.export.DictionaryExporter
 import com.example.export.DictionaryImporter
 import com.example.export.ExportFormat
 import com.example.export.JsonBackupManager
 import com.example.ui.components.buildCurriculumGroups
 import com.example.ui.components.buildPosGroups
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -127,7 +132,7 @@ class ExampleRobolectricTest {
     }
 
     @Test
-    fun `room migrations 1 to 3 preserve existing rows cleanly`() {
+    fun `room migrations 1 to 4 preserve existing rows cleanly`() {
         runBlocking {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val dbName = "test_migrate_${System.nanoTime()}.db"
@@ -184,9 +189,14 @@ class ExampleRobolectricTest {
         rawHelper.writableDatabase.close()
         rawHelper.close()
 
-        // Open with QamusiDatabase v3 + migrations
+        // Open with QamusiDatabase v5 + migrations
         val migratedDb = Room.databaseBuilder(context, QamusiDatabase::class.java, dbName)
-            .addMigrations(QamusiDatabase.MIGRATION_1_2, QamusiDatabase.MIGRATION_2_3)
+            .addMigrations(
+                QamusiDatabase.MIGRATION_1_2,
+                QamusiDatabase.MIGRATION_2_3,
+                QamusiDatabase.MIGRATION_3_4,
+                QamusiDatabase.MIGRATION_4_5
+            )
             .allowMainThreadQueries()
             .build()
         val rows = migratedDb.wordDao().getAllWordsOnce()
@@ -196,13 +206,16 @@ class ExampleRobolectricTest {
         assertEquals("", rows.first().ipa)
         assertEquals(2.5f, rows.first().srsEaseFactor)
         assertTrue(rows.first().isFavorite)
+        assertTrue(rows.first().prepositions.isEmpty())
+        assertEquals(0, rows.first().difficulty)
+        assertEquals("", rows.first().linguisticNotes)
         migratedDb.close()
         dbFile.delete()
         }
     }
 
     @Test
-    fun `duplicate detection arabic normalization and merge work accurately`() {
+    fun `strict anti-duplication blocks duplicate inserts and legacy merge still cleans groups`() {
         runBlocking {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val db = Room.inMemoryDatabaseBuilder(context, QamusiDatabase::class.java)
@@ -210,7 +223,7 @@ class ExampleRobolectricTest {
             .build()
         val repo = WordRepository(db.wordDao())
 
-        val id1 = repo.saveWord(
+        val firstRes = repo.saveWordChecked(
             WordEntry(
                 word = "  Sustainable ",
                 arabicMeaning = "مُستدامة",
@@ -219,7 +232,26 @@ class ExampleRobolectricTest {
                 synonyms = listOf("renewable")
             )
         )
-        repo.saveWord(
+        assertTrue(firstRes is SaveWordResult.Saved)
+        val id1 = (firstRes as SaveWordResult.Saved).id
+
+        // Attempting to save a duplicate word via saveWordChecked must be rejected
+        val secondRes = repo.saveWordChecked(
+            WordEntry(
+                word = "sustainable",
+                ipa = "/səˈsteɪnəbl/",
+                arabicMeaning = "صديق للبيئة",
+                books = listOf("A1")
+            )
+        )
+        assertTrue(secondRes is SaveWordResult.DuplicateRejected)
+        assertEquals(1, repo.getAllWordsOnce().size)
+
+        // Normalize Arabic alef/teh marbuta/tashkeel check
+        assertEquals("اداره", WordRepository.normalizeKey("إدارةٌ"))
+
+        // Simulate a legacy duplicate directly via DAO to verify duplicate detection & merge
+        db.wordDao().insertWord(
             WordEntry(
                 word = "sustainable",
                 ipa = "/səˈsteɪnəbl/",
@@ -229,9 +261,6 @@ class ExampleRobolectricTest {
                 synonyms = listOf("eco-friendly")
             )
         )
-
-        // Normalize Arabic alef/teh marbuta/tashkeel check
-        assertEquals("اداره", WordRepository.normalizeKey("إدارةٌ"))
 
         val dupes = repo.findDuplicatesFor("SUSTAINABLE", "", excludeId = 0L)
         assertEquals(2, dupes.size)
@@ -421,7 +450,7 @@ class ExampleRobolectricTest {
     }
 
     @Test
-    fun `offline xlsx and csv export round trips through DictionaryImporter`() {
+    fun `offline 10-sheet xlsx zip csv bundle and csv export round trips through DictionaryImporter`() {
         val sample = listOf(
             WordEntry(
                 id = 1L,
@@ -433,16 +462,23 @@ class ExampleRobolectricTest {
                 partsOfSpeech = listOf("صفة (Adj)"),
                 synonyms = listOf("renewable", "eco-friendly"),
                 antonyms = listOf("unsustainable"),
+                prepositions = listOf("sustainable for"),
+                collocations = listOf("sustainable development"),
                 definition = "Able to continue over time",
                 derivatives = "sustain, sustainability",
-                expressions = "sustainable development",
+                expressions = "sustainable growth",
+                linguisticNotes = "تأتي مع البيئة والتنمية",
+                examples = listOf("Solar power is a sustainable source of energy."),
+                personalHint = "تذكر أنها تتعلق بالاستمرارية",
                 notes = "تكررت في امتحان 2024",
                 importantNotes = "فرق بينها وبين continuous",
+                studyTags = listOf("مراجعة ليلة الامتحان"),
+                difficulty = 2,
                 isFavorite = true
             )
         )
 
-        // XLSX Export + Re-import
+        // 10-Sheet XLSX Export + Re-import
         val xlsxOut = ByteArrayOutputStream()
         DictionaryExporter.exportToStream(sample, ExportFormat.EXCEL, xlsxOut)
         val xlsxBytes = xlsxOut.toByteArray()
@@ -454,8 +490,25 @@ class ExampleRobolectricTest {
                 ze = zis.nextEntry
             }
         }
-        assertTrue(entries.containsKey("xl/worksheets/sheet1.xml"))
-        assertTrue(entries.getValue("xl/worksheets/sheet1.xml").contains("rightToLeft=\"1\""))
+        for (i in 1..10) {
+            assertTrue("Missing sheet$i.xml", entries.containsKey("xl/worksheets/sheet$i.xml"))
+            assertTrue(entries.getValue("xl/worksheets/sheet$i.xml").contains("rightToLeft=\"1\""))
+        }
+        val workbookXml = entries.getValue("xl/workbook.xml")
+        listOf(
+            "قاموسي",
+            "المرادفات",
+            "المضادات",
+            "التعريفات",
+            "الاشتقاقات",
+            "الملاحظات اللغوية",
+            "حروف الجر",
+            "المتلازمات اللفظية",
+            "التعبيرات والأمثلة",
+            "فهرس المنهج"
+        ).forEach { expectedSheetName ->
+            assertTrue("Workbook missing sheet: $expectedSheetName", workbookXml.contains(expectedSheetName))
+        }
 
         val parsedFromXlsx = DictionaryImporter.parseXlsx(ByteArrayInputStream(xlsxBytes))
         assertEquals(1, parsedFromXlsx.size)
@@ -464,9 +517,26 @@ class ExampleRobolectricTest {
         assertEquals("مستدام", parsedFromXlsx.first().arabicMeaning)
         assertEquals(listOf("المعاصر", "A1"), parsedFromXlsx.first().books)
         assertEquals(listOf("renewable", "eco-friendly"), parsedFromXlsx.first().synonyms)
+        assertEquals(listOf("sustainable for"), parsedFromXlsx.first().prepositions)
+        assertEquals(listOf("sustainable development"), parsedFromXlsx.first().collocations)
+        assertEquals("تأتي مع البيئة والتنمية", parsedFromXlsx.first().linguisticNotes)
+        assertEquals(2, parsedFromXlsx.first().difficulty)
         assertTrue(parsedFromXlsx.first().isFavorite)
 
-        // CSV Export + Re-import
+        // 10-Sheet Google Sheets ZIP CSV Bundle check
+        val zipOut = ByteArrayOutputStream()
+        DictionaryExporter.exportToStream(sample, ExportFormat.GOOGLE_SHEETS_BUNDLE, zipOut)
+        val csvZipNames = mutableListOf<String>()
+        ZipInputStream(ByteArrayInputStream(zipOut.toByteArray())).use { zis ->
+            var ze = zis.nextEntry
+            while (ze != null) {
+                csvZipNames.add(ze.name)
+                ze = zis.nextEntry
+            }
+        }
+        assertEquals(10, csvZipNames.size)
+
+        // Single CSV Export + Re-import
         val csvOut = ByteArrayOutputStream()
         DictionaryExporter.exportToStream(sample, ExportFormat.GOOGLE_SHEETS, csvOut)
         val csvBytes = csvOut.toByteArray()
@@ -481,6 +551,7 @@ class ExampleRobolectricTest {
         assertEquals("مستدام", parsedFromCsv.first().arabicMeaning)
         assertEquals(1, parsedFromCsv.first().locations.size)
         assertEquals("2", parsedFromCsv.first().locations.first().unit)
+        assertEquals(listOf("sustainable for"), parsedFromCsv.first().prepositions)
     }
 
     @Test
@@ -539,6 +610,160 @@ class ExampleRobolectricTest {
         assertEquals(1, skipSummary.insertedCount)
         assertEquals(1, skipSummary.skippedCount)
         assertEquals(2, repo.getAllWordsOnce().size)
+
+        db.close()
+        }
+    }
+
+    @Test
+    fun `study map builder and v4 mini quiz modes work accurately`() {
+        val w1 = WordEntry(
+            id = 1L,
+            word = "cope",
+            arabicMeaning = "يتأقلم",
+            books = listOf("المعاصر"),
+            locations = listOf(WordLocation("المعاصر", "1", "2", "18")),
+            prepositions = listOf("cope with"),
+            collocations = listOf("cope successfully"),
+            studyTags = listOf("حروف الجر المهمة"),
+            difficulty = 3
+        )
+        val w2 = WordEntry(
+            id = 2L,
+            word = "adapt",
+            arabicMeaning = "يتكيف",
+            books = listOf("المعاصر"),
+            locations = listOf(WordLocation("المعاصر", "1", "2", "19")),
+            prepositions = listOf("adapt to"),
+            studyTags = listOf("حروف الجر المهمة"),
+            srsTotalReviews = 3,
+            srsCorrectCount = 1,
+            lastWrongAt = 1_700_000_000_000L
+        )
+        val pool = listOf(w1, w2)
+
+        assertNotNull(StudyMapBuilder.pickWordOfTheDay(pool))
+        val map = StudyMapBuilder.buildCurriculumMap(pool)
+        assertEquals(1, map.size)
+        assertEquals("المعاصر", map.first().bookName)
+        assertEquals(1, map.first().units.size)
+
+        val groups = StudyMapBuilder.buildStudyGroups(pool)
+        assertEquals(1, groups.size)
+        assertEquals(2, groups.first().wordCount)
+
+        val bulkParsed = StudyMapBuilder.parseBulkQuickLines(
+            "resilient : مرن\ninspire - يلهم",
+            defaultBook = "A1",
+            defaultTag = "أفعال أساسية"
+        )
+        assertEquals(2, bulkParsed.size)
+        assertEquals("resilient", bulkParsed[0].word)
+        assertEquals("مرن", bulkParsed[0].arabicMeaning)
+
+        val scramble = QuizEngine.buildQuizQuestions(
+            pool,
+            pool,
+            QuizConfig(questionType = QuizQuestionType.LETTER_SCRAMBLE)
+        )
+        assertTrue(scramble.isNotEmpty())
+        assertEquals(QuestionInteractionKind.SCRAMBLE, scramble.first().interactionKind)
+
+        val matchRound = QuizEngine.buildQuizQuestions(
+            pool,
+            pool,
+            QuizConfig(questionType = QuizQuestionType.MATCH_PAIRS)
+        )
+        assertEquals(1, matchRound.size)
+        assertEquals(QuestionInteractionKind.MATCH_PAIRS, matchRound.first().interactionKind)
+        assertEquals(2, matchRound.first().matchPairs.size)
+
+        val prepQuiz = QuizEngine.buildQuizQuestions(
+            pool,
+            pool,
+            QuizConfig(questionType = QuizQuestionType.PREPOSITIONS_COLLOCATIONS)
+        )
+        assertEquals(2, prepQuiz.size)
+
+        val hardOnly = QuizEngine.filterWordsForConfig(
+            pool,
+            QuizConfig(scopeMode = QuizScopeMode.HARD_AND_MISTAKES)
+        )
+        assertEquals(2, hardOnly.size)
+
+        val tagOnly = QuizEngine.filterWordsForConfig(
+            pool,
+            QuizConfig(scopeMode = QuizScopeMode.BY_STUDY_TAG, selectedStudyTag = "حروف الجر المهمة")
+        )
+        assertEquals(2, tagOnly.size)
+    }
+
+    @Test
+    fun `word revision history restores previous snapshot and analytics engine computes real intelligence`() {
+        runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val db = Room.inMemoryDatabaseBuilder(context, QamusiDatabase::class.java)
+            .allowMainThreadQueries()
+            .build()
+        val repo = WordRepository(db.wordDao(), db.wordRevisionDao())
+
+        val id = repo.saveWord(
+            WordEntry(
+                word = "resilient",
+                arabicMeaning = "مرن وقادر على التكيف",
+                synonyms = listOf("adaptable"),
+                prepositions = listOf("resilient to"),
+                examples = listOf("Children are often remarkably resilient.")
+            )
+        )
+        val initial = repo.getWordOnce(id)!!
+        repo.saveWordChecked(initial.copy(arabicMeaning = "معنى معدّل مؤقت"))
+
+        val revisions = repo.observeRevisions(id).first()
+        assertEquals(1, revisions.size)
+
+        val restored = repo.restoreRevision(revisions.first().id)!!
+        assertEquals("مرن وقادر على التكيف", restored.arabicMeaning)
+        assertEquals("مرن وقادر على التكيف", repo.getWordOnce(id)!!.arabicMeaning)
+
+        val richProfile = LearningAnalyticsEngine.computeWordIntelligence(
+            restored.copy(srsRepetitions = 3, srsIntervalDays = 15, srsTotalReviews = 4, srsCorrectCount = 4)
+        )
+        assertFalse(richProfile.isIncomplete)
+        assertTrue(richProfile.masteryScorePercent >= 75)
+
+        val incompleteProfile = LearningAnalyticsEngine.computeWordIntelligence(
+            WordEntry(word = "spare", arabicMeaning = "")
+        )
+        assertTrue(incompleteProfile.isIncomplete)
+        assertTrue(incompleteProfile.missingFieldsAr.contains("المعنى العربي"))
+
+        val rank = LearningAnalyticsEngine.computeRank(250)
+        assertEquals("مستكشف الكلمات", rank.rankTitleAr)
+
+        val badges = LearningAnalyticsEngine.buildAchievements(
+            words = listOf(restored),
+            totalReviewsAllTime = 35,
+            overallAccuracyPercent = 85,
+            streakDays = 7,
+            miniQuizzesToday = 1,
+            duplicateGroupsCount = 0
+        )
+        assertEquals(10, badges.size)
+        assertTrue(badges.first { it.id == "quiz_champion" }.isUnlocked)
+        assertTrue(badges.first { it.id == "review_master" }.isUnlocked)
+        assertTrue(badges.first { it.id == "mini_quiz_spark" }.isUnlocked)
+
+        val prompts = LearningAnalyticsEngine.buildSentencePrompts(listOf(restored))
+        assertEquals(1, prompts.size)
+        assertEquals("resilient to", prompts.first().targetPhrase)
+
+        val prefs = AppPreferences(context)
+        val now = System.currentTimeMillis()
+        prefs.updateTodayMasterySnapshot(82, now)
+        val history = prefs.getLast7DaysHistory(currentMasteryPercent = 82, nowMillis = now)
+        assertEquals(7, history.size)
+        assertEquals(82, history.last().masteryPercent)
 
         db.close()
         }
